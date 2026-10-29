@@ -362,6 +362,16 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   .md-f{padding:12px 16px}.md-f .btn{flex:1}.md-f .sp{display:none}
   .stabs{top:-16px}
 }
+/* step-by-step policy form */
+.wz{display:flex;gap:6px;overflow-x:auto;padding:2px 0 6px;margin-bottom:8px;scrollbar-width:thin}
+.wz-s{display:flex;align-items:center;gap:8px;border:1px solid var(--bd);background:#fff;border-radius:22px;padding:4px 12px 4px 4px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;color:#4b5563;flex:none}
+.wz-s i{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:#eef0f4;font-style:normal;font-size:11.5px;font-weight:700}
+.wz-s.done i{background:var(--okl);color:var(--ok)}
+.wz-s.on{border-color:var(--o);color:var(--k);background:var(--ol)}
+.wz-s.on i{background:var(--o);color:#fff}
+.wz-info{font-size:12.5px;color:#4b5563;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:8px 10px;background:#FAFBFC;border:1px solid var(--bd);border-radius:10px}
+.bd.pu{background:#F3E8FF;color:#7C3AED}
+@media(max-width:700px){.wz-s:not(.on) span{display:none}.wz-s:not(.on){padding:4px}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
 @keyframes slide{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
@@ -473,6 +483,10 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
                         intimationDate, incidentDate, place, person, claimAmount, approvedAmount, settledAmount,
                         settledDate, payRef, remarks, docs:[], history:[{status,note,by,at}], createdBy(=policy owner),
                         loggedBy, loggedByName, createdAt, updatedAt, deleted }
+   policies stage-1   appNo, loginDate, bizType, pan · issuance: issueDate, policyTerm, ppt, prevInsurer, prevPolicyNo
+                        premium: basePremium, gstPct, gstAmount, premium(=total incl. GST), odPremium, tpPremium
+                        instalments: payments:[{due,paidOn,base,gstPct,total,mode,ref,receiptNo,by,at}], paidDues:[dates]
+   income extra       installments:[{due,paidOn,total,mode,ref,commission,brokerage,payoutRM}]  (renewal premiums)
    policies extra     status lifecycle: statusDate, statusHistory:[{status,from,date,amount,ref,note,by,at}],
                         closure:{type,date,amount,ref,note,claimId}, paidUp:{date,value}
    activityLog/{id}   { at, uid, name, action, target, details }
@@ -625,7 +639,7 @@ const DEFAULT_SETTINGS = {
   companies:[], plans:[], rms:[],
   categories:["Life","Health","Motor","Other"],
   frequencies:["Yearly","Half-Yearly","Quarterly","Monthly","Single"],
-  statuses:["Active","Lapsed","Paid-up","Renewed","Cancelled","Matured","Surrendered","Claim Settled"],
+  statuses:["Upcoming","Active","Lapsed","Paid-up","Renewed","Cancelled","Matured","Surrendered","Claim Settled","Ported Out"],
   paymentModes:["Cash","Cheque","UPI","Bank","Online"],
   branches:["Head Office"],
   kycTypes:["Aadhaar","PAN","Passport","Voter ID","Driving Licence"],
@@ -637,30 +651,55 @@ const FREQ_M = {"Yearly":12,"Half-Yearly":6,"Quarterly":3,"Monthly":1,"Single":0
 const DOC_TYPES = ["Policy PDF","ID Proof","Receipt","Other"];
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-/* Policy field schema — drives the form, bulk import, OCR and exports */
+/* Policy field schema — drives the step-by-step form, bulk import, OCR and exports.
+   s    = form step          req = needed to save Stage 1 (policy is saved as "Upcoming")
+   inf  = needed before the policy becomes In-force (status switches automatically)
+   only = show only for that line (life / motor / health)    formRo = read-only in the form (set automatically / via Status button)
+   Field keys (k) are the Firestore field names — existing keys are unchanged. */
+const BIZ_TYPES = ["Fresh","Renewal","Portability (from other insurer)","Rollover (from other agent)"];
 const F = [
-  {s:"basic",k:"policyNo",l:"Policy Number",req:1},
-  {s:"basic",k:"company",l:"Insurance Company",t:"select",o:()=>S.settings.companies.map(c=>c.name),req:1},
-  {s:"basic",k:"category",l:"Policy Type",t:"select",o:()=>S.settings.categories,req:1},
-  {s:"basic",k:"plan",l:"Plan / Policy Name",t:"list"},
-  {s:"basic",k:"sumAssured",l:"Sum Assured / Insured (₹)",t:"number"},
-  {s:"basic",k:"premium",l:"Premium Amount (₹)",t:"number",req:1},
-  {s:"basic",k:"frequency",l:"Premium Frequency",t:"select",o:()=>S.settings.frequencies},
-  {s:"basic",k:"startDate",l:"Policy Start Date",t:"date",req:1},
-  {s:"basic",k:"endDate",l:"End / Maturity Date",t:"date"},
-  {s:"basic",k:"renewalDate",l:"Next Renewal (auto)",t:"date",ro:1},
-  {s:"basic",k:"status",l:"Status",t:"select",o:()=>S.settings.statuses},
-  {s:"cust",k:"custName",l:"Customer Full Name",req:1},
+  // ---- Stage 1 · Login (minimum details) ----
+  {s:"s1",k:"appNo",l:"Application / Proposal No."},
+  {s:"s1",k:"loginDate",l:"Login Date",t:"date",req:1},
+  {s:"s1",k:"bizType",l:"Business Type",t:"select",o:()=>BIZ_TYPES},
+  {s:"s1",k:"company",l:"Insurance Company",t:"select",o:()=>S.settings.companies.map(c=>c.name),req:1,inf:1},
+  {s:"s1",k:"category",l:"Policy Type",t:"select",o:()=>S.settings.categories,req:1,inf:1},
+  {s:"s1",k:"plan",l:"Plan / Policy Name",t:"list"},
+  {s:"s1",k:"custName",l:"Customer Full Name",req:1,inf:1},
+  {s:"s1",k:"phone",l:"Phone",t:"tel"},
+  {s:"s1",k:"pan",l:"PAN No."},
+  {s:"s1",k:"premium",l:"Total Premium incl. GST (₹)",t:"number",req:1,inf:1},
+  {s:"s1",k:"rmName",l:"RM Name",t:"select",o:()=>S.settings.rms.map(r=>r.name)},
+  // ---- Customer details ----
   {s:"cust",k:"dob",l:"Date of Birth",t:"date"},
   {s:"cust",k:"age",l:"Age (auto)",t:"number",ro:1},
   {s:"cust",k:"gender",l:"Gender",t:"select",o:()=>S.settings.genders},
-  {s:"cust",k:"phone",l:"Phone",t:"tel"},
   {s:"cust",k:"email",l:"Email",t:"email"},
   {s:"cust",k:"address",l:"Address",t:"area",w:1},
   {s:"cust",k:"nomineeName",l:"Nominee Name"},
   {s:"cust",k:"nomineeRelation",l:"Nominee Relation",t:"select",o:()=>S.settings.relations},
   {s:"cust",k:"kycType",l:"KYC / ID Type",t:"select",o:()=>S.settings.kycTypes},
   {s:"cust",k:"kycNo",l:"KYC / ID Number"},
+  // ---- Policy issuance (after the insurer issues the policy) ----
+  {s:"issue",k:"policyNo",l:"Policy Number",inf:1},
+  {s:"issue",k:"issueDate",l:"Policy Issue Date",t:"date"},
+  {s:"issue",k:"startDate",l:"Risk Start / Commencement Date",t:"date",inf:1},
+  {s:"issue",k:"policyTerm",l:"Policy Term / Tenure (years)",t:"number"},
+  {s:"issue",k:"ppt",l:"Premium Paying Term — PPT (years)",t:"number",only:"life"},
+  {s:"issue",k:"endDate",l:"Maturity / Expiry Date",t:"date"},
+  {s:"issue",k:"sumAssured",l:"Sum Assured / Insured (₹)",t:"number"},
+  {s:"issue",k:"renewalDate",l:"Next Due (auto)",t:"date",ro:1},
+  {s:"issue",k:"status",l:"Status (auto)",t:"select",o:()=>S.settings.statuses,formRo:1},
+  {s:"issue",k:"prevInsurer",l:"Previous Insurer (renewal / port)"},
+  {s:"issue",k:"prevPolicyNo",l:"Previous Policy No."},
+  // ---- Premium & GST ----
+  {s:"prem",k:"frequency",l:"Premium Frequency",t:"select",o:()=>S.settings.frequencies},
+  {s:"prem",k:"odPremium",l:"Own Damage (OD) Premium (₹)",t:"number",only:"motor"},
+  {s:"prem",k:"tpPremium",l:"Third Party (TP) Premium (₹)",t:"number",only:"motor"},
+  {s:"prem",k:"basePremium",l:"Net Premium excl. GST (₹)",t:"number"},
+  {s:"prem",k:"gstPct",l:"GST %",t:"number"},
+  {s:"prem",k:"gstAmount",l:"GST Amount (₹)",t:"number"},
+  // ---- Motor ----
   {s:"motor",k:"vehNo",l:"Vehicle Number"},
   {s:"motor",k:"vehMake",l:"Make"},
   {s:"motor",k:"vehModel",l:"Model"},
@@ -668,10 +707,11 @@ const F = [
   {s:"motor",k:"engineNo",l:"Engine No."},
   {s:"motor",k:"chassisNo",l:"Chassis No."},
   {s:"motor",k:"idv",l:"IDV (₹)",t:"number"},
-  {s:"rm",k:"rmName",l:"RM Name",t:"select",o:()=>S.settings.rms.map(r=>r.name)},
+  // ---- RM / Agent ----
   {s:"rm",k:"rmCode",l:"RM Code"},
   {s:"rm",k:"branch",l:"Branch",t:"select",o:()=>S.settings.branches},
   {s:"rm",k:"commPct",l:"Commission %",t:"number"},
+  // ---- Income & Payout (first / new premium) ----
   {s:"fin",k:"premiumCollected",l:"Premium Collected (₹)",t:"number",p:"canViewIncome"},
   {s:"fin",k:"commission",l:"Agent Commission (₹)",t:"number",p:"canViewIncome"},
   {s:"fin",k:"brokerage",l:"Brokerage / Incentive (₹)",t:"number",p:"canViewIncome"},
@@ -682,7 +722,7 @@ const F = [
 ];
 const FK = Object.fromEntries(F.map(f=>[f.k,f]));
 const FIN_KEYS = F.filter(f=>f.s==="fin").map(f=>f.k);
-const SECTIONS = [["basic","Policy Details"],["cust","Customer / Insured"],["motor","Motor Details"],["rm","RM / Agent"],["fin","Income & Payout"],["docs","Documents"]];
+const SECTIONS = [["s1","Stage 1 · Login"],["cust","Customer Details"],["issue","Policy Issuance"],["prem","Premium & GST"],["motor","Motor Details"],["rm","RM / Agent"],["fin","Income & Payout"],["docs","Documents"]];
 
 /* ================================ ICONS ================================ */
 const ICONS = {
@@ -737,14 +777,20 @@ const initials = s => String(s||"?").trim().split(/\s+/).slice(0,2).map(w=>w[0])
 function addMonths(s,m){ const [y,mo,d]=s.split("-").map(Number); const t=new Date(y,mo-1+m,1); const last=new Date(t.getFullYear(),t.getMonth()+1,0).getDate(); t.setDate(Math.min(d,last)); return ymd(t); }
 const daysTo = s => Math.round((new Date(s+"T00:00:00") - new Date(today()+"T00:00:00"))/864e5);
 function calcAge(dob){ if(!dob) return ""; const b=new Date(dob+"T00:00:00"), n=new Date(); let a=n.getFullYear()-b.getFullYear(); if(n.getMonth()<b.getMonth()||(n.getMonth()===b.getMonth()&&n.getDate()<b.getDate())) a--; return a>=0&&a<130?a:""; }
-/* Next premium/renewal due date: steps from start by frequency until >= today, capped at end date */
+/* Next premium / renewal due date
+   - steps from risk start by premium frequency; after the PPT (Life) only the maturity date remains
+   - if instalments were recorded (paidDues): first due after the last paid one (can be overdue)
+   - otherwise: first due on/after today. Always capped at the maturity / expiry date. */
 function nextDue(p){
   const s=p.startDate, e=p.endDate;
   if(!s) return e||"";
   const m = FREQ_M[p.frequency] ?? 12;
   if(!m) return e||"";
-  const t=today(); let k=1, d=addMonths(s,m);
-  while(d<t && k<1200){ k++; d=addMonths(s,m*k); }
+  const paid=(p.paidDues||[]).filter(Boolean).sort(), lastPaid=paid[paid.length-1]||"", t=today();
+  let k=1, d=addMonths(s,m);
+  while((lastPaid ? d<=lastPaid : d<t) && k<1200){ k++; d=addMonths(s,m*k); }
+  const ppt=num(p.ppt);
+  if(ppt>0 && String(p.category||"").toLowerCase()==="life"){ const lastPrem=addMonths(s,Math.round(ppt*12)-m); if(d>lastPrem) d=e||d; }
   if(e && d>e) d=e;
   return d;
 }
@@ -796,7 +842,8 @@ function promptBox(title,label,val=""){
     const ok=()=>{ res(inp.value.trim()); m._close(true); };
     m.querySelector("[data-c]").onclick=()=>m._close(); m.querySelector("[data-ok]").onclick=ok; inp.onkeydown=e=>{ if(e.key==="Enter") ok(); }; });
 }
-const statusBadge = s => { const c={Active:"gr",Lapsed:"er",Renewed:"bl",Cancelled:"gy","Paid-up":"or",Matured:"bl",Surrendered:"wa","Claim Settled":"kk"}[s]||"gy"; return `<span class="bd ${c}">${esc(s||"—")}</span>`; };
+const stLabel = s => s==="Active" ? "In-force" : s;   // stored value stays "Active"; shown as In-force
+const statusBadge = s => { const c={Upcoming:"pu",Active:"gr",Lapsed:"er",Renewed:"bl",Cancelled:"gy","Paid-up":"or",Matured:"bl",Surrendered:"wa","Claim Settled":"kk","Ported Out":"gy"}[s]||"gy"; return `<span class="bd ${c}">${esc(stLabel(s)||"—")}</span>`; };
 const catBadge = c => { const k=String(c||"").toLowerCase(); const cl={life:"bl",health:"or",motor:"kk"}[k]||"gy"; return `<span class="bd ${cl}">${esc(c||"—")}</span>`; };
 const emptyRow = (cols,msg) => `<tr><td colspan="${cols}"><div class="empty">${I("file")}<div>${esc(msg)}</div></div></td></tr>`;
 
@@ -824,7 +871,7 @@ const LOB_COLORS = {life:"#2563EB",health:"#F97316",motor:"#111111",other:"#9CA3
 const catColor = c => LOB_COLORS[String(c||"").toLowerCase()] || "#6B7280";
 const inLob = c => S.lob==="All" || c===S.lob;
 const lobPolicies = () => Object.values(S.policies).filter(p=>inLob(p.category));
-const lobIncome = () => Object.values(S.income).filter(x=>inLob(x.category));
+const lobIncome = () => Object.values(S.income).flatMap(incEntries).filter(x=>inLob(x.category));
 const lobTitle = s => S.lob==="All" ? s : `${S.lob} ${s}`;
 const lobFile = s => S.lob==="All" ? s : `${S.lob}_${s}`;
 const LOB_PAGES = ["dashboard","policies","income","bulk","renewals","claims"];
@@ -1045,7 +1092,7 @@ function renewalItems(all=false){   // all=true ignores the selected LOB tab (be
     if(p.status && p.status!=="Active" && !pu) continue;
     const due=pu?p.endDate:nextDue(p); if(!due) continue;
     const days=daysTo(due); if(days>30 || days<-60) continue;
-    out.push({p,due,days,reminded:p.remindedFor===due,kind:isLife(p.category)?(p.endDate&&due===p.endDate?"Maturity":"Premium"):"Renewal"});
+    out.push({p,due,days,reminded:p.remindedFor===due,kind:isLife(p.category)?(p.endDate&&due===p.endDate?"Maturity":"Premium"):(p.endDate&&due<p.endDate?"Instalment":"Renewal")});
   }
   return out.sort((a,b)=>a.days-b.days);
 }
@@ -1084,7 +1131,7 @@ function groupReport(P,key){
   const g={};
   P.forEach(p=>{ const k=p[key]||"Unassigned"; const x=(g[k]??={n:0,act:0,prem:0,comm:0,pay:0});
     x.n++; if(p.status==="Active") x.act++; if(p.status!=="Cancelled") x.prem+=num(p.premium);
-    const f=S.income[p.id]; if(f){ x.comm+=num(f.commission)+num(f.brokerage); x.pay+=num(f.payoutRM); } });
+    incEntries(S.income[p.id]).forEach(f=>{ x.comm+=num(f.commission)+num(f.brokerage); x.pay+=num(f.payoutRM); }); });
   return Object.entries(g).sort((a,b)=>b[1].prem-a[1].prem);
 }
 function reportTable(title,label,rows,lim=8){
@@ -1120,7 +1167,7 @@ function renderDashboard(){
     <p>${L==="All"?"All lines of business":esc(L)+" insurance only"} · ${new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p></div>
   <div class="ph-a">${can("canAddPolicy")?`<button class="btn o" data-add>${I("plus")}Add ${L==="All"?"":esc(L)+" "}Policy</button>`:""}</div></div>
   <div class="stats">
-    ${stat("b","file",L==="All"?"Total Policies":`${esc(L)} Policies`,P.length.toLocaleString("en-IN"),`${active.toLocaleString("en-IN")} active`)}
+    ${stat("b","file",L==="All"?"Total Policies":`${esc(L)} Policies`,P.length.toLocaleString("en-IN"),`${active.toLocaleString("en-IN")} in-force · ${P.filter(p=>p.status==="Upcoming").length.toLocaleString("en-IN")} upcoming`)}
     ${stat("o","rupee","Total Premium",inrC(prem),"excluding cancelled")}
     ${stat("k","bell","Renewals Due (30d)",due.length,`${due.filter(r=>r.days<0).length} overdue`)}
     ${(()=>{ const oc=lobClaims().filter(c=>!CLAIM_DONE.includes(c.status)); return stat("b","claim","Open Claims",oc.length,`${inrC(oc.reduce((a,c)=>a+num(c.claimAmount),0))} claimed`); })()}
@@ -1180,7 +1227,7 @@ function policyRows(){
   const q=PT.q.trim().toLowerCase();
   let arr=lobPolicies().filter(p=>
     (S.lob!=="All"||!PT.cat||p.category===PT.cat)&&(!PT.comp||p.company===PT.comp)&&(!PT.status||(PT.status==="__open"?!isClosed(p.status):PT.status==="__closed"?isClosed(p.status):p.status===PT.status))&&(!PT.rm||p.rmName===PT.rm)&&
-    (!q||[p.policyNo,p.custName,p.phone,p.vehNo,p.company,p.plan,p.rmName,p.email,p.kycNo,p.engineNo,p.chassisNo].some(v=>String(v||"").toLowerCase().includes(q))));
+    (!q||[p.policyNo,p.appNo,p.pan,p.custName,p.phone,p.vehNo,p.company,p.plan,p.rmName,p.email,p.kycNo,p.engineNo,p.chassisNo].some(v=>String(v||"").toLowerCase().includes(q))));
   const k=PT.sort, d=PT.dir, numK=["premium","sumAssured","idv","createdAt"].includes(k);
   arr.sort((a,b)=>{ let x=k==="renewalDate"?nextDue(a):a[k], y=k==="renewalDate"?nextDue(b):b[k];
     if(numK) return (num(x)-num(y))*d; return String(x||"").localeCompare(String(y||""))*d; });
@@ -1198,7 +1245,7 @@ function polCols(){
 const R_COLS=["premium","sumAssured","idv"];
 function polCell(k,p){
   switch(k){
-    case "policyNo": return `<td><b>${esc(p.policyNo)}</b></td>`;
+    case "policyNo": return p.policyNo?`<td><b>${esc(p.policyNo)}</b></td>`:`<td class="nm"><b style="color:#7C3AED">App ${esc(p.appNo||"—")}</b><small>Login ${fmtD(p.loginDate)}</small></td>`;
     case "custName": return `<td class="nm"><b>${esc(p.custName)}</b><small>${esc(p.phone||"")}</small></td>`;
     case "company": return `<td class="nm"><b>${esc(p.company)}</b><small>${esc(p.plan||"")}</small></td>`;
     case "category": return `<td>${catBadge(p.category)}</td>`;
@@ -1225,7 +1272,7 @@ function renderPolicies(){
         <div class="srch">${I("search")}<input class="in" id="pQ" placeholder="Search policy no, customer, phone, ${isMotor(S.lob)?"vehicle, engine, chassis":"vehicle"}…" value="${esc(PT.q)}"></div>
         ${S.lob==="All"?`<select class="in" id="pCat"><option value="">All types</option>${opt(S.settings.categories,PT.cat)}</select>`:""}
         <select class="in" id="pComp"><option value="">All companies</option>${opt(S.settings.companies.map(c=>c.name),PT.comp)}</select>
-        <select class="in" id="pSt"><option value="">All status</option><option value="__open" ${PT.status==="__open"?"selected":""}>In force (not closed)</option><option value="__closed" ${PT.status==="__closed"?"selected":""}>Closed (all)</option>${opt(S.settings.statuses,PT.status)}</select>
+        <select class="in" id="pSt"><option value="">All status</option><option value="__open" ${PT.status==="__open"?"selected":""}>In force (not closed)</option><option value="__closed" ${PT.status==="__closed"?"selected":""}>Closed (all)</option>${S.settings.statuses.map(o=>`<option value="${esc(o)}" ${o===PT.status?"selected":""}>${esc(stLabel(o))}</option>`).join("")}</select>
         <select class="in" id="pRm"><option value="">All RMs</option>${opt(S.settings.rms.map(r=>r.name),PT.rm)}</select>
         <button class="btn g sm" id="pClr">Clear</button>
       </div>
@@ -1242,7 +1289,7 @@ function renderPolicies(){
     el.querySelector("#pBody").onclick=e=>{
       const b=e.target.closest("[data-act]"), tr=e.target.closest("tr[data-id]"); if(!tr) return; const p=S.policies[tr.dataset.id]; if(!p) return;
       const a=b?.dataset.act||"view";
-      if(a==="view") openPolicy("view",p); if(a==="edit") openPolicy("edit",p); if(a==="renew") openPolicy("renew",p); if(a==="del") deletePolicy(p); if(a==="status") openStatusModal(p);
+      if(a==="view") openPolicy("view",p); if(a==="edit") openPolicy("edit",p); if(a==="renew") openPolicy("renew",p); if(a==="del") deletePolicy(p); if(a==="status") openStatusModal(p); if(a==="pay") openPayment(p);
     };
     $("#pPager").onclick=e=>{ const b=e.target.closest("[data-pg]"); if(!b) return; PT.page+=b.dataset.pg==="next"?1:-1; renderPoliciesBody(); el.querySelector(".tw").scrollTop=0; };
     S.shell.policies=true;
@@ -1257,7 +1304,7 @@ function renderPoliciesBody(){
       <td><div class="acts">
         <button class="btn g ic" data-act="view" title="View">${I("eye")}</button>
         ${ce?`<button class="btn g ic" data-act="edit" title="Edit">${I("edit")}</button>`:""}
-        ${cr&&!isClosed(p.status)?`<button class="btn g ic" data-act="renew" title="Renew">${I("renew")}</button>`:""}
+        ${ce&&isInstalment(p)?`<button class="btn g ic" data-act="pay" title="Record premium (instalment)">${I("rupee")}</button>`:cr&&!isClosed(p.status)&&p.status!=="Upcoming"?`<button class="btn g ic" data-act="renew" title="Renew (new policy)">${I("renew")}</button>`:""}
         ${ce?`<button class="btn g ic" data-act="status" title="Change status / close">${I("flag")}</button>`:""}
         ${cd?`<button class="btn g ic d" data-act="del" title="Delete">${I("trash")}</button>`:""}
       </div></td></tr>`).join("") : emptyRow(cols.length+1, S.synced.policies||Object.keys(S.policies).length?"No policies match your filters.":"Loading policies…");
@@ -1274,50 +1321,79 @@ async function deletePolicy(p){
   }catch(e){ toast("Delete failed: "+e.code,"er"); }
 }
 
-/* ================================ POLICY MODAL ================================ */
+/* ================================ POLICY MODAL (step-by-step) ================================
+   Add / Edit / Renew open as steps: Stage 1 · Login → Customer → Issuance → Premium & GST → (Motor) → RM → Income → Documents.
+   "Save & Next" saves every time. The first save creates the policy as "Upcoming".
+   When every In-force field is filled (Policy No, Risk Start, Company, Type, Customer, Premium) the status
+   switches to Active (shown as "In-force") automatically. View shows everything on one page. */
 const draftKey = id => `ib_draft:${S.user?.uid}:${id}`;
 let M=null; // current modal state
+const filled = v => v!=="" && v!=null;
+const showField = (f,cat) => !f.only || (f.only==="life"?isLife(cat):f.only==="motor"?isMotor(cat):f.only==="health"?isHealth(cat):true);
+const polSteps = cat => SECTIONS.filter(([k])=>(k!=="fin"||finAny())&&(k!=="motor"||isMotor(cat)));
+const missingInforce = d => F.filter(f=>f.inf&&!filled(d[f.k])).map(f=>f.l);
+function autoStatus(d,prev){ const ok=!missingInforce(d).length; if(!prev||prev==="Upcoming"||prev==="Active") return ok?"Active":"Upcoming"; return prev; }
+const addDays = (s,n) => { const d=new Date(s+"T00:00:00"); d.setDate(d.getDate()+n); return ymd(d); };
+const GST_CUTOFF = "2025-09-22";   // individual life & health insurance premiums are GST-exempt from this date
+function defaultGst(cat,date){ if(isMotor(cat)) return 18; const old=!!date&&date<GST_CUTOFF; if(isHealth(cat)) return old?18:0; if(isLife(cat)) return old?"":0; return 18; }
+function termEnd(cat,start,term){ if(!start||!num(term)) return ""; const e=addMonths(start,Math.round(num(term)*12)); return isLife(cat)?e:addDays(e,-1); }
+/* Life (any time) and multi-year Health/Motor paid yearly → premium is an instalment on the SAME policy, not a new policy */
+const isInstalment = p => !isClosed(p.status) && p.status!=="Upcoming" && p.status!=="Lapsed" && (isLife(p.category) || (!!p.endDate && !!nextDue(p) && nextDue(p)<p.endDate));
+
 function fieldHTML(f,v,ro){
-  const id="pf_"+f.k, lock=ro||f.ro, req=f.req?'<span class="req">*</span>':"";
+  const id="pf_"+f.k, lock=ro||f.ro||f.formRo;
+  const req=f.req?'<span class="req">*</span>':f.inf?'<span class="req" title="Needed for In-force">•</span>':"";
   v = v ?? "";
   let ctl;
   if(f.t==="select"){
     const opts=(f.o?f.o():[]).slice(); if(v!=="" && !opts.includes(v)) opts.unshift(v);
-    ctl=`<select class="in" id="${id}" name="${f.k}" ${lock?"disabled":""}><option value="">Select…</option>${opts.map(o=>`<option ${o===v?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+    const lab=f.k==="status"?stLabel:(x=>x);
+    ctl=`<select class="in" id="${id}" name="${f.k}" ${lock?"disabled":""}><option value="">Select…</option>${opts.map(o=>`<option value="${esc(o)}" ${o===v?"selected":""}>${esc(lab(o))}</option>`).join("")}</select>`;
   } else if(f.t==="list") ctl=`<input class="in" id="${id}" name="${f.k}" list="dl_${f.k}" value="${esc(v)}" ${lock?"readonly":""} autocomplete="off"><datalist id="dl_${f.k}"></datalist>`;
   else if(f.t==="area") ctl=`<textarea class="in" id="${id}" name="${f.k}" ${lock?"readonly":""}>${esc(v)}</textarea>`;
   else ctl=`<input class="in" id="${id}" name="${f.k}" type="${f.t||"text"}" ${f.t==="number"?'step="any"':""} value="${esc(v)}" ${lock?"readonly":""}>`;
-  return `<label class="f ${f.w?"w2":""}" data-k="${f.k}">${esc(f.l)} ${req}${ctl}</label>`;
+  return `<label class="f ${f.w?"w2":""} ${f.only?"js-only-"+f.only:""}" data-k="${f.k}"><span>${esc(f.l)} ${req}</span>${ctl}</label>`;
 }
-function openPolicy(mode,p={}){
+const polLabel = p => p.policyNo || (p.appNo?`App ${p.appNo}`:"New");
+
+function openPolicy(mode,p={},step=0){
   if(mode==="add"&&!can("canAddPolicy")) return; if(mode==="edit"&&!can("canEditPolicy")) return;
+  if(mode==="renew"&&isInstalment(p)) return openPayment(p);
   const ro=mode==="view";
   const fin=p.id?(S.income[p.id]||{}):{};
   let data={...p,...fin};
-  if(mode==="add") data={status:"Active",frequency:"Yearly",category:S.lob!=="All"?S.lob:(S.settings.categories[0]||""),startDate:today(),premiumCollected:""};
-  if(mode==="renew"){
-    const start=nextDue(p)||p.endDate||today();
-    data={...p,...fin,startDate:start,endDate:isMotor(p.category)||String(p.category).toLowerCase()==="health"?addMonths(start,12):p.endDate,status:"Active",payRef:"",payMethod:"",premiumCollected:p.premium,remindedFor:"",docs:[]};
+  if(mode==="add"){ const cat=S.lob!=="All"?S.lob:(S.settings.categories[0]||"");
+    data={status:"Upcoming",bizType:"Fresh",frequency:"Yearly",category:cat,loginDate:today(),policyTerm:isLife(cat)?"":1,gstPct:defaultGst(cat,today())}; }
+  if(mode==="renew"){   // Health / Motor / Other: a NEW policy record (company, plan and premium may change)
+    const start=p.endDate?addDays(p.endDate,1):(nextDue(p)||today());
+    data={...p,appNo:"",policyNo:"",loginDate:today(),issueDate:"",startDate:start,endDate:"",policyTerm:p.policyTerm||1,bizType:"Renewal",prevInsurer:p.company||"",prevPolicyNo:p.policyNo||"",
+      status:"Upcoming",gstPct:defaultGst(p.category,start),gstAmount:"",premiumCollected:"",commission:"",brokerage:"",payoutRM:"",netIncome:"",payMethod:"",payRef:""};
     delete data.id;
   }
   const dk = mode==="edit"?draftKey(p.id):mode==="add"?draftKey("new"):null;
   let restored=false;
   if(dk){ try{ const dr=JSON.parse(localStorage.getItem(dk)||"null"); if(dr){ data={...data,...dr}; restored=true; } }catch{} }
-  M={mode,p,dk,dirty:false,docs:mode==="renew"?[]:[...(p.docs||[])],removed:[],pending:[],commManual:!!data.commission};
-  const secs=SECTIONS.filter(([k])=>k!=="fin"||finAny());
-  const body=`
-    ${!ro?`<div class="ocrbar">${I("scan")}<div><b>AI OCR Auto-fill</b><br><span class="mu">Upload a policy copy (photo or PDF) — fields fill automatically. Verify before saving.</span></div><div class="sp"></div><button class="btn o sm" type="button" id="ocrBtn">${I("scan")}OCR Scan</button></div>`:""}
-    <div class="stabs">${secs.map(([k,t])=>`<button type="button" data-jump="${k}" class="${k==="motor"?"js-motor":""}">${t}</button>`).join("")}</div>
-    <form id="polForm" autocomplete="off">
-    ${secs.map(([k,t])=>`<div class="sec ${k==="motor"?"js-motor":""}" id="sec_${k}"><h4>${t}</h4>${k==="docs"?`<div class="dgrid">${DOC_TYPES.map(dt=>`<div class="dslot" data-type="${dt}"><div class="dslot-h"><b>${dt}</b>${ro?"":`<button type="button" class="btn sm" data-docadd="${dt}">${I("clip")}Attach</button>`}</div><div class="dlist"></div></div>`).join("")}</div>`
-      :`<div class="fg">${F.filter(f=>f.s===k&&fAllowed(f)).map(f=>fieldHTML(f,data[f.k],ro)).join("")}</div>`}</div>`).join("")}
-    ${ro&&p.id?policyExtras(p):""}
-    ${ro&&p.id?`<div class="note">Created by <b>${esc(p.createdByName||"—")}</b> on ${fmtTs(p.createdAt)} · Last updated ${fmtTs(p.updatedAt)}${p.remindedFor?` · Reminded for ${fmtD(p.remindedFor)}`:""}${p.renewOf?" · Renewal of an earlier policy":""}</div>`:""}
-    </form>`;
-  const title = mode==="add"?"Add Policy":mode==="edit"?`Edit Policy · ${esc(p.policyNo)}`:mode==="renew"?`Renew Policy · ${esc(p.policyNo)}`:`Policy · ${esc(p.policyNo)}`;
+  M={mode,p,dk,dirty:false,savedId:mode==="edit"?p.id:null,step,steps:polSteps(data.category),
+     docs:(mode==="edit"||ro)?[...(p.docs||[])]:[],removed:[],pending:[],
+     commManual:filled(data.commission),endTouched:filled(data.endDate)&&mode!=="renew",gstTouched:filled(data.gstAmount),baseTouched:filled(data.basePremium)&&!filled(data.odPremium)};
+  const secs = ro ? polSteps(data.category) : SECTIONS.filter(([k])=>k!=="fin"||finAny());
+  const sectionHTML=([k,t])=>`<div class="sec ${k==="motor"?"js-motor":""}" id="sec_${k}"><h4>${t}</h4>${k==="docs"
+      ?`<div class="dgrid">${DOC_TYPES.map(dt=>`<div class="dslot" data-type="${dt}"><div class="dslot-h"><b>${dt}</b>${ro?"":`<button type="button" class="btn sm" data-docadd="${dt}">${I("clip")}Attach</button>`}</div><div class="dlist"></div></div>`).join("")}</div>`
+      :`<div class="fg">${F.filter(f=>f.s===k&&fAllowed(f)).map(f=>fieldHTML(f,data[f.k],ro)).join("")}</div>${k==="prem"?`<div class="note" id="premTot" style="margin-top:12px"></div><p class="mu" style="font-size:12px;margin-top:8px">Multi-year Health / Motor paid upfront → choose frequency <b>Single</b>. GST default: Motor 18% · individual Life &amp; Health 0% from 22-Sep-2025 (older policies: enter the GST you charged).</p>`:""}`}</div>`;
+  const miss=missingInforce(data);
+  const created = p.id?`<div class="note">Created by <b>${esc(p.createdByName||"—")}</b> on ${fmtTs(p.createdAt)} · Last updated ${fmtTs(p.updatedAt)}${p.remindedFor?` · Reminded for ${fmtD(p.remindedFor)}`:""}${p.renewOf?" · Renewal of an earlier policy":""}</div>`:"";
+  const body = ro ? `
+    ${p.status==="Upcoming"?`<div class="note" style="margin-bottom:14px">${statusBadge("Upcoming")} Waiting for issuance — still needed for In-force: <b>${miss.map(esc).join(", ")||"—"}</b></div>`:""}
+    <div class="stabs">${secs.map(([k,t])=>`<button type="button" data-jump="${k}">${t}</button>`).join("")}</div>
+    <form id="polForm">${secs.map(sectionHTML).join("")}${p.id?policyExtras(p):""}${created}</form>`
+  : `<div class="ocrbar">${I("scan")}<div><b>AI OCR Auto-fill</b><br><span class="mu">Upload a policy copy or proposal form — fields fill automatically. Verify before saving.</span></div><div class="sp"></div><button class="btn o sm" type="button" id="ocrBtn">${I("scan")}OCR Scan</button></div>
+    <div class="wz" id="wz"></div><div class="wz-info" id="wzInfo"></div>
+    <form id="polForm" autocomplete="off">${secs.map(sectionHTML).join("")}</form>`;
+  const title = mode==="add"?"Add Policy":mode==="edit"?`Edit · ${esc(polLabel(p))}`:mode==="renew"?`Renew · ${esc(polLabel(p))}`:`Policy · ${esc(polLabel(p))}`;
+  const inst=ro&&isInstalment(p);
   const footer = ro
-    ? `<span class="sp"></span>${can("canManageClaims")&&p.id?`<button class="btn" data-m="claim">${I("claim")}Claim</button>`:""}${can("canEditPolicy")&&p.id?`<button class="btn" data-m="status">${I("flag")}Status</button>`:""}${can("canEditPolicy")?`<button class="btn" data-m="edit">${I("edit")}Edit</button>`:""}${can("canAddPolicy")&&can("canEditPolicy")&&!isClosed(p.status)?`<button class="btn" data-m="renew">${I("renew")}Renew</button>`:""}<button class="btn p" data-m="close">Close</button>`
-    : `<span class="mu" id="saveState" style="font-size:12px">${restored?"Draft restored":"Auto-saving draft"}</span><span class="sp"></span><button class="btn" data-m="cancel">Cancel</button><button class="btn p" data-m="save" id="saveBtn">${I("check")}${mode==="renew"?"Save Renewal":"Save Policy"}</button>`;
+    ? `<span class="sp"></span>${can("canManageClaims")&&p.id&&p.status!=="Upcoming"?`<button class="btn" data-m="claim">${I("claim")}Claim</button>`:""}${can("canEditPolicy")&&p.id?`<button class="btn" data-m="status">${I("flag")}Status</button>`:""}${can("canEditPolicy")?`<button class="btn" data-m="edit">${I("edit")}${p.status==="Upcoming"?"Complete details":"Edit"}</button>`:""}${can("canEditPolicy")&&inst?`<button class="btn" data-m="pay">${I("rupee")}Record Premium</button>`:""}${can("canAddPolicy")&&can("canEditPolicy")&&!inst&&!isClosed(p.status)&&p.status!=="Upcoming"?`<button class="btn" data-m="renew">${I("renew")}Renew</button>`:""}<button class="btn p" data-m="close">Close</button>`
+    : `<span class="mu" id="saveState" style="font-size:12px">${restored?"Draft restored":"Auto-saving draft"}</span><span class="sp"></span><button class="btn" data-m="cancel">Cancel</button><button class="btn" data-m="back">‹ Back</button><button class="btn" data-m="saveclose">Save &amp; Close</button><button class="btn p" data-m="next" id="saveBtn">Save &amp; Next ›</button>`;
   const m=openModal({title,body,footer,wide:true,onClose:async()=>{
     if(ro||!M?.dirty) return true;
     const ok=await confirmBox("Discard unsaved changes? (Your draft will be deleted.)","Discard",true);
@@ -1328,45 +1404,98 @@ function openPolicy(mode,p={}){
   m.querySelector(".md-f").onclick=async e=>{ const a=e.target.closest("[data-m]")?.dataset.m; if(!a) return;
     if(a==="close") m._close(true);
     if(a==="cancel") m._close();
-    if(a==="save") savePolicy();
+    if(a==="back"){ M.step=Math.max(0,M.step-1); wzRender(); m.querySelector(".md-b").scrollTop=0; }
+    if(a==="next") savePolicy({next:true});
+    if(a==="saveclose") savePolicy({close:true});
     if(a==="status"){ m._close(true); openStatusModal(p); }
     if(a==="claim"){ m._close(true); openClaim(null,p); }
+    if(a==="pay"){ m._close(true); openPayment(p); }
     if(a==="edit"||a==="renew"){ m._close(true); openPolicy(a,p); } };
   $$("[data-jump]",m).forEach(b=>b.onclick=()=>$("#sec_"+b.dataset.jump,m).scrollIntoView({behavior:"smooth",block:"start"}));
-  const toggleMotor=()=>$$(".js-motor",m).forEach(x=>x.classList.toggle("hidden",!isMotor(val("category"))));
-  toggleMotor(); fillPlans(); renderDocLists();
+  $("#wz",m)?.addEventListener("click",e=>{ const b=e.target.closest("[data-step]"); if(b){ M.step=+b.dataset.step; wzRender(); m.querySelector(".md-b").scrollTop=0; } });
+  M.refresh=()=>{ const c=val("category");
+    $$(".js-motor",m).forEach(x=>x.classList.toggle("hidden",!isMotor(c)));
+    $$(".js-only-life",m).forEach(x=>x.classList.toggle("hidden",!isLife(c)));
+    $$(".js-only-motor",m).forEach(x=>x.classList.toggle("hidden",!isMotor(c)));
+    $$(".js-only-health",m).forEach(x=>x.classList.toggle("hidden",!isHealth(c)));
+    wzRender(); };
+  M.refresh(); fillPlans(); renderDocLists();
   if(!ro){
     const saveDraft=debounce(()=>{ if(!M?.dk) return; try{ localStorage.setItem(M.dk,JSON.stringify(collect())); $("#saveState",m)&&($("#saveState",m).textContent="Draft saved "+new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})); }catch{} },400);
-    form.addEventListener("input",e=>{ M.dirty=true; if(e.target.name==="commission") M.commManual=!!e.target.value; recalc(e.target.name); saveDraft(); });
+    const wzLater=debounce(()=>wzRender(),200);
+    form.addEventListener("input",e=>{ const n=e.target.name; M.dirty=true;
+      if(n==="pan"){ const c=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); try{ e.target.setSelectionRange(c,c); }catch{} }
+      if(n==="commission") M.commManual=!!e.target.value;
+      if(n==="endDate") M.endTouched=!!e.target.value;
+      if(n==="gstAmount") M.gstTouched=!!e.target.value;
+      if(n==="basePremium") M.baseTouched=!!e.target.value;
+      recalc(n); saveDraft(); wzLater(); });
     form.addEventListener("change",e=>{ const n=e.target.name; M.dirty=true;
-      if(n==="category"){ toggleMotor(); fillPlans(); } if(n==="company") fillPlans();
+      if(n==="category"){ M.refresh(); fillPlans(); } if(n==="company") fillPlans();
       if(n==="rmName"){ const r=S.settings.rms.find(x=>x.name===e.target.value); if(r){ setVal("rmCode",r.code||""); setVal("branch",r.branch||""); if(r.commPct!==""&&r.commPct!=null) setVal("commPct",r.commPct); } }
-      recalc(n); saveDraft(); });
+      recalc(n); saveDraft(); wzRender(); });
     recalc("init");
     $("#ocrBtn",m).onclick=()=>{ const inp=$("#ocrInput"); inp.value=""; inp.onchange=()=>inp.files[0]&&doOCR(inp.files[0]); inp.click(); };
   }
   m.querySelector(".dgrid").onclick=e=>{
     const add=e.target.closest("[data-docadd]");
-    if(add){ const inp=$("#docInput"); inp.value=""; inp.onchange=()=>{ [...inp.files].forEach(f=>M.pending.push({type:add.dataset.docadd,file:f})); M.dirty=true; renderDocLists(); }; inp.click(); return; }
+    if(add){ const inp=$("#docInput"); inp.value=""; inp.onchange=()=>{ [...inp.files].forEach(f=>M.pending.push({type:add.dataset.docadd,file:f})); M.dirty=true; renderDocLists(); wzRender(); }; inp.click(); return; }
     const op=e.target.closest("[data-open]"); if(op){ e.preventDefault(); const [kind,i]=op.dataset.open.split(":"); kind==="p"?window.open(URL.createObjectURL(M.pending[+i].file),"_blank"):openDoc(M.docs[+i]); return; }
-    const rm=e.target.closest("[data-rmdoc]"); if(rm){ const [kind,i]=rm.dataset.rmdoc.split(":"); if(kind==="p") M.pending.splice(+i,1); else M.removed.push(M.docs[+i]); M.dirty=true; renderDocLists(); }
+    const rm=e.target.closest("[data-rmdoc]"); if(rm){ const [kind,i]=rm.dataset.rmdoc.split(":"); if(kind==="p") M.pending.splice(+i,1); else M.removed.push(M.docs[+i]); M.dirty=true; renderDocLists(); wzRender(); }
   };
+}
+function stepDone(k,d){
+  if(k==="docs") return M.docs.filter(x=>!M.removed.includes(x)).length+M.pending.length>0;
+  const fs=F.filter(f=>f.s===k&&fAllowed(f)&&showField(f,d.category)&&!f.ro&&!f.formRo); if(!fs.length) return false;
+  const need=fs.filter(f=>f.req||f.inf), AUTO=["frequency","gstPct","gstAmount","bizType","premiumCollected","payMethod"];   // defaults / auto-filled don't count
+  return need.length ? need.every(f=>filled(d[f.k])) : fs.some(f=>!AUTO.includes(f.k)&&filled(d[f.k]));
+}
+function wzRender(){
+  if(!M?.el||M.mode==="view") return; const m=M.el; if(!$("#wz",m)) return;
+  const d=collect(); M.steps=polSteps(d.category); M.step=Math.max(0,Math.min(M.step,M.steps.length-1));
+  const cur=M.steps[M.step][0], miss=missingInforce(d);
+  $("#wz",m).innerHTML=M.steps.map(([k,t],i)=>{ const done=stepDone(k,d); return `<button type="button" class="wz-s ${i===M.step?"on":""} ${done?"done":""}" data-step="${i}"><i>${done&&i!==M.step?"✓":i+1}</i><span>${esc(t)}</span></button>`; }).join("");
+  const on=$("#wz .on",m); if(on) $("#wz",m).scrollLeft=Math.max(0,on.offsetLeft-40);
+  const other=d.status&&!["Active","Upcoming"].includes(d.status);
+  $("#wzInfo",m).innerHTML = miss.length
+    ? `${statusBadge(other?d.status:"Upcoming")}<span>Needed for <b>In-force</b>: ${miss.map(esc).join(", ")}</span>`
+    : `${statusBadge(other?d.status:"Active")}<span>All mandatory details are filled${M.savedId?"":" — save to make it In-force"}.</span>`;
+  $$("#polForm > .sec",m).forEach(s=>s.classList.toggle("hidden",s.id!=="sec_"+cur));
+  const bk=$('[data-m="back"]',m); if(bk) bk.disabled=M.step===0;
+  const sb=$("#saveBtn",m); if(sb&&!sb.disabled) sb.innerHTML=M.step>=M.steps.length-1?`${I("check")}Save &amp; Finish`:`Save &amp; Next ›`;
 }
 const val = k => { const e=$("#pf_"+k); return e?e.value:""; };
 function setVal(k,v,mark){
   const e=$("#pf_"+k); if(!e) return;
-  if(e.tagName==="SELECT" && v!=="" && ![...e.options].some(o=>o.value===String(v))){ const o=document.createElement("option"); o.textContent=v; e.appendChild(o); }
+  if(e.tagName==="SELECT" && v!=="" && v!=null && ![...e.options].some(o=>o.value===String(v))){ const o=document.createElement("option"); o.value=v; o.textContent=k==="status"?stLabel(v):v; e.appendChild(o); }
   e.value=v??""; if(mark) e.classList.add("filled");
 }
 function fillPlans(){
   const dl=$("#dl_plan"); if(!dl) return; const c=val("company"), cat=val("category");
   dl.innerHTML=S.settings.plans.filter(p=>(!c||p.company===c)&&(!cat||p.category===cat)).map(p=>`<option value="${esc(p.name)}">`).join("");
 }
+const r2 = n => Math.round(n*100)/100;
 function recalc(src){
-  if(["startDate","endDate","frequency","init"].includes(src)) setVal("renewalDate",nextDue({startDate:val("startDate"),endDate:val("endDate"),frequency:val("frequency")}));
+  if(!M) return; const cat=val("category");
+  // maturity / expiry from risk start + term (Life: same date; Health/Motor: one day before)
+  if(["startDate","policyTerm","category","init"].includes(src) && !M.endTouched){ const e=termEnd(cat,val("startDate"),val("policyTerm")); if(e) setVal("endDate",e); }
+  // default GST % by line and date
+  if(["category","startDate","loginDate","init"].includes(src) && val("gstPct")===""){ const g=defaultGst(cat,val("startDate")||val("loginDate")); if(g!==""){ setVal("gstPct",g); if(src!=="init") src="gstPct"; } }
+  if(src==="category" && M.mode!=="view"){ const g=defaultGst(cat,val("startDate")||val("loginDate")); if(g!==""){ setVal("gstPct",g); src="gstPct"; } }
+  // motor: net premium = OD + TP
+  if(["odPremium","tpPremium"].includes(src) && !M.baseTouched && (val("odPremium")!==""||val("tpPremium")!=="")){ setVal("basePremium",r2(num(val("odPremium"))+num(val("tpPremium")))); src="basePremium"; }
+  // GST amount and total premium
+  if(["basePremium","gstPct","gstAmount"].includes(src) && val("basePremium")!==""){
+    const b=num(val("basePremium"));
+    if(src!=="gstAmount" && !M.gstTouched) setVal("gstAmount",r2(b*num(val("gstPct"))/100));
+    setVal("premium",r2(b+num(val("gstAmount")))); src="premium";
+  }
+  setVal("renewalDate",nextDue({startDate:val("startDate"),endDate:val("endDate"),frequency:val("frequency"),ppt:val("ppt"),category:cat,paidDues:(M.savedId&&S.policies[M.savedId]?.paidDues)||M.p?.paidDues}));
   if(src==="dob"||src==="init") setVal("age",calcAge(val("dob")));
+  const pt=$("#premTot"); if(pt) pt.innerHTML=`Total premium (incl. GST): <b>${val("premium")!==""?inr(val("premium")):"—"}</b>${val("gstAmount")!==""?` · GST ${inr(val("gstAmount"))}`:""}${val("basePremium")!==""?` · Net ${inr(val("basePremium"))}`:""} <span class="mu">— this total also shows in Stage 1</span>`;
   if(!$("#pf_netIncome")&&!$("#pf_commission")) return;
-  if((src==="premium"||src==="commPct") && !M.commManual && $("#pf_commission") && val("commPct")!=="") setVal("commission",Math.round(num(val("premium"))*num(val("commPct"))/100));
+  const base=val("basePremium")!==""?num(val("basePremium")):num(val("premium"));   // commission is on premium excl. GST
+  if(["premium","basePremium","commPct","init"].includes(src) && !M.commManual && $("#pf_commission") && val("commPct")!=="" && base) setVal("commission",Math.round(base*num(val("commPct"))/100));
   if(src==="premium" && $("#pf_premiumCollected") && !$("#pf_premiumCollected").dataset.touched) setVal("premiumCollected",val("premium"));
   if(src==="premiumCollected") $("#pf_premiumCollected").dataset.touched=1;
   const payout = $("#pf_payoutRM") ? num(val("payoutRM")) : num(S.income[M?.p?.id]?.payoutRM);
@@ -1405,53 +1534,147 @@ async function uploadFile(policyId,type,file){
   const r=await addDoc(collection(db,"policyFiles"),{policyId,type,name:file.name,mime:f.type,data,createdBy:S.user.uid,createdAt:serverTimestamp()});
   return {type,name:file.name,fileId:r.id,size:f.size};
 }
-async function savePolicy(){
+async function savePolicy(opts={}){
   const m=M.el, d=collect();
   $$(".in.bad",m).forEach(e=>e.classList.remove("bad"));
-  const miss=F.filter(f=>f.req&&fAllowed(f)&&(d[f.k]===""||d[f.k]==null));
-  if(miss.length){ miss.forEach(f=>$("#pf_"+f.k,m)?.classList.add("bad")); $("#pf_"+miss[0].k,m)?.scrollIntoView({behavior:"smooth",block:"center"}); return toast("Please fill: "+miss.map(f=>f.l).join(", "),"er"); }
-  if(d.endDate && d.startDate && d.endDate<d.startDate) return toast("End date cannot be before start date.","er");
-  const isNew=M.mode!=="edit";
-  if(M.mode==="add"){ const dup=Object.values(S.policies).find(x=>String(x.policyNo).toLowerCase()===String(d.policyNo).toLowerCase());
-    if(dup && !(await confirmBox(`Policy number ${d.policyNo} already exists (${dup.custName}). Save anyway?`,"Save anyway"))) return; }
-  const btn=$("#saveBtn",m); btn.disabled=true; btn.innerHTML='<div class="spin"></div> Saving…';
+  const miss=F.filter(f=>f.req&&fAllowed(f)&&!filled(d[f.k]));
+  if(!filled(d.appNo)&&!filled(d.policyNo)) miss.unshift(FK.appNo);
+  if(miss.length){
+    miss.forEach(f=>$("#pf_"+f.k,m)?.classList.add("bad"));
+    const si=M.steps.findIndex(([k])=>k===miss[0].s); if(si>=0&&si!==M.step){ M.step=si; wzRender(); }
+    $("#pf_"+miss[0].k,m)?.focus();
+    return toast("Please fill: "+miss.map(f=>f.k==="appNo"?"Application No. (or Policy No.)":f.l).join(", "),"er");
+  }
+  if(d.endDate && d.startDate && d.endDate<d.startDate) return toast("Maturity / expiry date cannot be before the risk start date.","er");
+  if(filled(d.pan) && !/^[A-Z]{5}\d{4}[A-Z]$/.test(d.pan) && !M.panOk){ if(!(await confirmBox(`PAN "${d.pan}" doesn't look valid (format ABCDE1234F). Save anyway?`,"Save anyway"))) return; M.panOk=true; }
+  const id=M.savedId, isNew=!id;
+  const others=Object.values(S.policies).filter(x=>x.id!==id);
+  if(filled(d.policyNo)&&!M.dupP){ const dup=others.find(x=>String(x.policyNo||"").toLowerCase()===String(d.policyNo).toLowerCase());
+    if(dup){ if(!(await confirmBox(`Policy number ${d.policyNo} already exists (${dup.custName}). Save anyway?`,"Save anyway"))) return; M.dupP=true; } }
+  if(filled(d.appNo)&&!M.dupA){ const dup=others.find(x=>String(x.appNo||"").toLowerCase()===String(d.appNo).toLowerCase());
+    if(dup){ if(!(await confirmBox(`Application number ${d.appNo} already exists (${dup.custName}). Save anyway?`,"Save anyway"))) return; M.dupA=true; } }
+  const btn=$("#saveBtn",m), old=btn.innerHTML; btn.disabled=true; btn.innerHTML='<div class="spin"></div> Saving…';
   try{
-    const ref=isNew?doc(collection(db,"policies")):doc(db,"policies",M.p.id);
+    const ref=isNew?doc(collection(db,"policies")):doc(db,"policies",id);
+    const cur=isNew?null:(S.policies[id]||M.p);
     const uploaded=[]; for(const pd of M.pending) uploaded.push(await uploadFile(ref.id,pd.type,pd.file));
     const pol={}; F.filter(f=>f.s!=="fin").forEach(f=>{ if(d[f.k]!==undefined) pol[f.k]=d[f.k]; });
-    if(!isMotor(pol.category)) F.filter(f=>f.s==="motor").forEach(f=>pol[f.k]="");
-    pol.renewalDate=nextDue(pol); pol.age=calcAge(pol.dob);
+    if(!isMotor(pol.category)) F.filter(f=>f.s==="motor"||f.only==="motor").forEach(f=>pol[f.k]="");
+    if(!isLife(pol.category)) pol.ppt="";
+    const prev=isNew?"":(cur?.status||d.status||"");
+    pol.status=autoStatus(pol,prev);
+    pol.renewalDate=nextDue({...pol,paidDues:cur?.paidDues}); pol.age=calcAge(pol.dob);
     pol.docs=[...M.docs.filter(x=>!M.removed.includes(x)),...uploaded];
+    const who=S.profile.name||S.user.email;
+    const hist=[...(cur?.statusHistory||[])];
+    if(isNew) hist.push({status:pol.status,from:"",date:pol.loginDate||today(),amount:"",ref:"",note:M.mode==="renew"?`Renewal of ${M.p.policyNo||""}`:"Logged in",by:who,at:Date.now()});
+    else if(prev!==pol.status) hist.push({status:pol.status,from:prev,date:today(),amount:"",ref:"",note:pol.status==="Active"?"All mandatory details filled":"Mandatory details incomplete",by:who,at:Date.now()});
+    pol.statusHistory=hist;
     pol.deleted=false; pol.updatedAt=serverTimestamp(); pol.updatedBy=S.user.uid;
-    if(isNew){ Object.assign(pol,{createdBy:S.user.uid,createdByName:S.profile.name||S.user.email,createdAt:serverTimestamp(),remindedFor:""}); if(M.mode==="renew") pol.renewOf=M.p.id; }
+    if(isNew){ Object.assign(pol,{createdBy:S.user.uid,createdByName:who,createdAt:serverTimestamp(),remindedFor:""}); if(M.mode==="renew") pol.renewOf=M.p.id; }
     const b=writeBatch(db);
     b.set(ref,pol,{merge:true});
     if(finAny()){
       const fin={}; F.filter(f=>f.s==="fin"&&fAllowed(f)&&!f.ro).forEach(f=>fin[f.k]=d[f.k]??"");
-      const prev=S.income[M.p?.id]||{};
-      const payout=can("canViewPayout")?num(fin.payoutRM):num(prev.payoutRM);
-      const comm=can("canViewIncome")?num(fin.commission)+num(fin.brokerage):num(prev.commission)+num(prev.brokerage);
+      const prevF=S.income[ref.id]||{};
+      const payout=can("canViewPayout")?num(fin.payoutRM):num(prevF.payoutRM);
+      const comm=can("canViewIncome")?num(fin.commission)+num(fin.brokerage):num(prevF.commission)+num(prevF.brokerage);
       fin.netIncome=comm-payout;
-      b.set(doc(db,"income",ref.id),{...fin,policyId:ref.id,policyNo:pol.policyNo,company:pol.company,category:pol.category,rmName:pol.rmName||"",custName:pol.custName,date:pol.startDate,
-        createdBy:isNew?S.user.uid:(M.p.createdBy||S.user.uid),deleted:false,updatedAt:serverTimestamp()},{merge:true});
+      b.set(doc(db,"income",ref.id),{...fin,policyId:ref.id,policyNo:pol.policyNo||"",company:pol.company,category:pol.category,rmName:pol.rmName||"",custName:pol.custName,date:pol.startDate||pol.loginDate||"",
+        createdBy:isNew?S.user.uid:(cur?.createdBy||S.user.uid),deleted:false,updatedAt:serverTimestamp()},{merge:true});
     }
-    if(M.mode==="renew" && can("canEditPolicy")) b.update(doc(db,"policies",M.p.id),{status:"Renewed",renewedTo:ref.id,updatedAt:serverTimestamp(),updatedBy:S.user.uid});
+    // renewal (Health/Motor/Other): the old policy is marked Renewed once the new one is In-force
+    if(M.mode==="renew" && pol.status==="Active" && !M.oldMarked && can("canEditPolicy") && S.policies[M.p.id] && S.policies[M.p.id].status!=="Renewed"){
+      const op=S.policies[M.p.id];
+      b.update(doc(db,"policies",M.p.id),{status:"Renewed",renewedTo:ref.id,statusHistory:[...(op.statusHistory||[]),{status:"Renewed",from:op.status||"",date:today(),amount:"",ref:"",note:`Renewed as ${pol.policyNo}${pol.company!==op.company?` with ${pol.company}`:""}`,by:who,at:Date.now()}],updatedAt:serverTimestamp(),updatedBy:S.user.uid});
+      M.oldMarked=true;
+    }
     await b.commit();
     for(const r of M.removed){ try{ if(r.path&&storage) await deleteObject(sref(storage,r.path)); if(r.fileId) await deleteDoc(doc(db,"policyFiles",r.fileId)); }catch{} }
-    logAct(`policy.${M.mode==="edit"?"edit":M.mode==="renew"?"renew":"add"}`,pol.policyNo,pol.custName);
+    logAct(`policy.${isNew?(M.mode==="renew"?"renew":"add"):"edit"}`,pol.policyNo||pol.appNo,`${pol.custName} · ${pol.status}`);
     if(M.dk) localStorage.removeItem(M.dk);
-    toast(M.mode==="edit"?"Policy updated.":M.mode==="renew"?"Renewal saved.":"Policy added.","ok");
-    M.dirty=false; m._close(true);
-  }catch(e){ console.error(e); toast("Save failed: "+(e.code||e.message),"er"); btn.disabled=false; btn.innerHTML=`${I("check")}Save Policy`; }
+    M.savedId=ref.id; M.dk=draftKey(ref.id); M.docs=pol.docs; M.pending=[]; M.removed=[]; M.dirty=false;
+    setVal("status",pol.status); renderDocLists();
+    const msg = pol.status==="Active" ? (prev!=="Active"?"Saved — policy is now In-force ✓":"Saved.") : pol.status==="Upcoming" ? `Saved as Upcoming — ${missingInforce(pol).length} detail(s) still needed for In-force.` : "Saved.";
+    toast(msg,"ok");
+    btn.disabled=false;
+    if(opts.close || (opts.next && M.step>=M.steps.length-1)){ m._close(true); return; }
+    if(opts.next) M.step++;
+    wzRender(); m.querySelector(".md-b").scrollTop=0;
+    const st=$("#saveState",m); if(st) st.textContent="Saved "+new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"});
+  }catch(e){ console.error(e); toast("Save failed: "+(e.code||e.message),"er"); btn.disabled=false; btn.innerHTML=old; }
+}
+
+/* ================================ PREMIUM INSTALMENTS ================================
+   Life (and multi-year Health/Motor paid yearly): renewal = instalment on the SAME policy number.
+   Saves payments[] + paidDues[] on the policy (next due moves forward) and, for finance users,
+   the renewal commission / payout in income/{policyId}.installments[]. */
+function openPayment(p,due){
+  if(!can("canEditPolicy")) return toast("You need Edit Policy permission to record premiums.","er");
+  due = due || nextDue(p);
+  const fin=can("canViewIncome"), pay=can("canViewPayout");
+  const base=filled(p.basePremium)?num(p.basePremium):"";
+  const m=openModal({title:`Record premium · ${esc(polLabel(p))}`,body:`
+    <div class="note" style="margin-bottom:14px"><b>${esc(p.custName)}</b> · ${esc(p.company)} · ${esc(p.plan||"")} · ${esc(p.frequency||"")}<br><span class="mu">Same policy number — this is an instalment, not a new policy.</span></div>
+    <div class="fg">
+      <label class="f">Due date<input class="in" type="date" id="pyDue" value="${esc(due||"")}"></label>
+      <label class="f">Paid on<input class="in" type="date" id="pyOn" value="${today()}"></label>
+      <label class="f">Payment mode<select class="in" id="pyMode">${S.settings.paymentModes.map(x=>`<option ${x===p.payMethod?"selected":""}>${esc(x)}</option>`).join("")}</select></label>
+      <label class="f">Net premium excl. GST (₹)<input class="in" type="number" step="any" id="pyBase" value="${base}"></label>
+      <label class="f">GST %<input class="in" type="number" step="any" id="pyGst" value="${esc(p.gstPct??"")}"></label>
+      <label class="f">Total paid (₹) <span class="req">*</span><input class="in" type="number" step="any" id="pyTot" value="${filled(p.premium)?num(p.premium):""}"></label>
+      <label class="f">Payment ref / UTR<input class="in" id="pyRef"></label>
+      <label class="f">Receipt no.<input class="in" id="pyRcpt"></label>
+      <label class="f">Receipt (image / PDF)<input class="in" type="file" id="pyFile" accept="image/*,application/pdf" style="padding-top:7px"></label>
+      ${fin?`<label class="f">Renewal commission (₹)<input class="in" type="number" step="any" id="pyComm"></label><label class="f">Brokerage / incentive (₹)<input class="in" type="number" step="any" id="pyBrk"></label>`:""}
+      ${pay?`<label class="f">Payout to RM (₹)<input class="in" type="number" step="any" id="pyPay"></label>`:""}
+    </div>
+    ${payHistory(p)}`,
+    footer:`<button class="btn" data-c>Cancel</button><button class="btn p" id="pySave">${I("check")}Save payment</button>`});
+  const calc=()=>{ const b=$("#pyBase",m).value; if(b!=="") $("#pyTot",m).value=r2(num(b)*(1+num($("#pyGst",m).value)/100)); };
+  $("#pyBase",m).oninput=calc; $("#pyGst",m).oninput=calc;
+  m.querySelector("[data-c]").onclick=()=>m._close(true);
+  $("#pySave",m).onclick=async()=>{
+    const g=id=>{ const e=$("#"+id,m); return e?String(e.value).trim():""; }, n=id=>g(id)===""?"":num(g(id));
+    const dueV=g("pyDue"); if(!dueV) return toast("Due date is required.","er");
+    if(g("pyTot")==="") return toast("Enter the total amount paid.","er");
+    if((p.paidDues||[]).includes(dueV) && !(await confirmBox(`The premium due on ${fmtD(dueV)} is already recorded. Record it again?`,"Record again"))) return;
+    const btn=$("#pySave",m); btn.disabled=true; btn.innerHTML='<div class="spin"></div> Saving…';
+    try{
+      const cur=S.policies[p.id]||p;
+      const file=$("#pyFile",m).files[0]; const rec=file?await uploadFile(p.id,"Receipt",file):null;
+      const entry={due:dueV,paidOn:g("pyOn")||today(),base:n("pyBase"),gstPct:n("pyGst"),total:num(g("pyTot")),mode:g("pyMode"),ref:g("pyRef"),receiptNo:g("pyRcpt"),by:S.profile.name||S.user.email,at:Date.now()};
+      const patch={payments:[...(cur.payments||[]),entry],paidDues:[...new Set([...(cur.paidDues||[]),dueV])],updatedAt:serverTimestamp(),updatedBy:S.user.uid};
+      if(rec) patch.docs=[...(cur.docs||[]),rec];
+      patch.renewalDate=nextDue({...cur,...patch});
+      const b=writeBatch(db);
+      b.update(doc(db,"policies",p.id),patch);
+      if(fin||pay){
+        const inst={due:dueV,paidOn:entry.paidOn,total:entry.total,mode:entry.mode,ref:entry.ref,commission:fin?n("pyComm"):"",brokerage:fin?n("pyBrk"):"",payoutRM:pay?n("pyPay"):""};
+        const prevF=S.income[p.id]||{};
+        b.set(doc(db,"income",p.id),{policyId:p.id,policyNo:cur.policyNo||"",company:cur.company||"",category:cur.category||"",rmName:cur.rmName||"",custName:cur.custName||"",
+          date:prevF.date||cur.startDate||"",createdBy:cur.createdBy||S.user.uid,deleted:false,installments:[...(prevF.installments||[]),inst],updatedAt:serverTimestamp()},{merge:true});
+      }
+      await b.commit();
+      logAct("premium.paid",cur.policyNo,`due ${dueV} · ${entry.total}`);
+      toast(`Premium recorded. Next due ${patch.renewalDate?fmtD(patch.renewalDate):"—"}.`,"ok"); m._close(true);
+    }catch(e){ console.error(e); toast("Save failed: "+(e.code||e.message),"er"); btn.disabled=false; btn.innerHTML=`${I("check")}Save payment`; }
+  };
+}
+function payHistory(p){
+  const ps=[...(p.payments||[])].reverse();
+  return ps.length?`<div class="sec" style="margin-top:18px"><h4>Premium instalments paid</h4>${ps.map(x=>`<div class="list-i"><div class="tx"><b>Due ${fmtD(x.due)} · paid ${fmtD(x.paidOn)}</b><small>${esc([x.mode,x.ref,x.receiptNo,`by ${x.by}`].filter(Boolean).join(" · "))}</small></div><b>${inr(x.total)}</b></div>`).join("")}</div>`:"";
 }
 
 /* ================================ OCR / AI ================================ */
 function ocrPrompt(){
-  const keys=F.filter(f=>f.s!=="fin"&&!f.ro).map(f=>`${f.k} (${f.l})`).join(", ");
+  const keys=F.filter(f=>f.s!=="fin"&&!f.ro&&!f.formRo).map(f=>`${f.k} (${f.l})`).join(", ");
   return `You extract data from Indian insurance policy documents. Return ONLY a JSON object with these keys when found: ${keys}.
 Rules: dates as YYYY-MM-DD; numbers without commas or currency; category must be one of [${S.settings.categories.join(", ")}];
 frequency one of [${S.settings.frequencies.join(", ")}]; gender one of [${S.settings.genders.join(", ")}];
 company = insurer's name; custName = policy holder / insured / proposer; premium = total premium payable incl. GST;
+appNo = application / proposal number; loginDate = proposal / login date; issueDate = policy issue date; startDate = risk commencement date;
+policyTerm and ppt in years; basePremium = premium excluding GST; gstAmount = GST / tax amount; pan = proposer's PAN;
 sumAssured = sum assured / sum insured; for motor fill vehNo, vehMake, vehModel, vehYear, engineNo, chassisNo, idv.
 Omit keys you cannot find. Do not guess.`;
 }
@@ -1509,7 +1732,7 @@ function parseOCRText(t){
   o.vehNo=g(/\b([A-Z]{2}[\s\-]?\d{1,2}[\s\-]?[A-Z]{0,3}[\s\-]?\d{4})\b/);
   o.engineNo=g(/engine\s*(?:no|number)\.?\s*[:\-]?\s*([A-Z0-9]{6,})/i);
   o.chassisNo=g(/chassis\s*(?:no|number)\.?\s*[:\-]?\s*([A-Z0-9]{8,})/i);
-  const pan=g(/\b([A-Z]{5}\d{4}[A-Z])\b/); if(pan){ o.kycType="PAN"; o.kycNo=pan; }
+  const pan=g(/\b([A-Z]{5}\d{4}[A-Z])\b/); if(pan) o.pan=pan;
   const co=S.settings.companies.find(c=>t.toLowerCase().includes(c.name.toLowerCase().split(" ")[0])); if(co) o.company=co.name;
   o.category= o.vehNo||/motor|vehicle|private car|two wheeler/i.test(t)?"Motor": /health|mediclaim|hospital/i.test(t)?"Health": /life|assured|maturity/i.test(t)?"Life":"";
   return o;
@@ -1519,7 +1742,7 @@ async function doOCR(file){
   try{
     const raw=await runOCR(file); let n=0;
     for(const [k,v0] of Object.entries(raw||{})){
-      const f=FK[k]; if(!f||f.ro||f.s==="fin"||v0==null||v0==="") continue;
+      const f=FK[k]; if(!f||f.ro||f.formRo||f.s==="fin"||v0==null||v0==="") continue;
       let v=v0;
       if(f.t==="date"){ v=parseDate(v); if(!v) continue; }
       if(f.t==="number") v=num(v);
@@ -1527,7 +1750,7 @@ async function doOCR(file){
       if(f.t==="select"){ const o=(f.o?.()||[]).find(x=>x.toLowerCase()===String(v).toLowerCase()); if(o) v=o; }
       setVal(k,v,true); n++;
     }
-    $$(".js-motor",M.el).forEach(x=>x.classList.toggle("hidden",!isMotor(val("category"))));
+    M.refresh&&M.refresh();
     fillPlans(); recalc("init"); recalc("premium"); M.dirty=true;
     M.pending.push({type:"Policy PDF",file}); renderDocLists();
     toast(n?`OCR filled ${n} fields — highlighted in orange. Please verify.`:"OCR finished but found no fields.","ok");
@@ -1537,10 +1760,18 @@ async function doOCR(file){
 }
 
 /* ================================ INCOME & PAYOUT ================================ */
+/* income/{policyId} = first / new premium row + installments[] (renewal premiums) → flattened into rows */
+function incEntries(x){
+  if(!x) return [];
+  const inst=(x.installments||[]).map((i,n)=>({...x,id:x.id+"#"+n,date:i.paidOn||i.due,premiumCollected:i.total,commission:i.commission,brokerage:i.brokerage,payoutRM:i.payoutRM,
+    netIncome:num(i.commission)+num(i.brokerage)-num(i.payoutRM),payMethod:i.mode,payRef:i.ref,_inst:true}));
+  const hasMain=["premiumCollected","commission","brokerage","payoutRM"].some(k=>filled(x[k])&&num(x[k])!==0);
+  return [...(hasMain||!inst.length?[x]:[]),...inst];
+}
 const IT={from:"",to:"",comp:"",rm:"",cat:"",q:"",page:1,per:50};
 function incomeRows(){
   const q=IT.q.toLowerCase();
-  return Object.values(S.income).filter(x=>inLob(x.category)&&(!IT.from||x.date>=IT.from)&&(!IT.to||x.date<=IT.to)&&(!IT.comp||x.company===IT.comp)&&(!IT.rm||x.rmName===IT.rm)&&(!IT.cat||x.category===IT.cat)&&
+  return Object.values(S.income).flatMap(incEntries).filter(x=>inLob(x.category)&&(!IT.from||x.date>=IT.from)&&(!IT.to||x.date<=IT.to)&&(!IT.comp||x.company===IT.comp)&&(!IT.rm||x.rmName===IT.rm)&&(!IT.cat||x.category===IT.cat)&&
     (!q||[x.policyNo,x.custName,x.payRef].some(v=>String(v||"").toLowerCase().includes(q)))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
 }
 function renderIncome(){
@@ -1587,7 +1818,7 @@ function renderIncomeBody(){
   $("#iStats").innerHTML=(ci?st("b","rupee","Total Premium",inrC(T.prem),`${rows.length.toLocaleString("en-IN")} records`)+st("o","chart","Total Commission",inrC(T.comm),"commission + brokerage"):"")+(cp?st("k","wallet","Total Payout",inrC(T.pay),"to RMs"):"")+(ci?st("gr","check","Net Profit",inrC(T.comm-T.pay),T.comm?`${Math.round((T.comm-T.pay)/T.comm*100)}% margin`:""):"");
   const pages=Math.max(1,Math.ceil(rows.length/IT.per)); IT.page=Math.min(Math.max(1,IT.page),pages);
   const cols=5+(ci?4:0)+(cp?1:0)+2;
-  $("#iBody").innerHTML=rows.length?rows.slice((IT.page-1)*IT.per,IT.page*IT.per).map(x=>`<tr class="ck" data-id="${x.policyId||x.id}"><td>${fmtD(x.date)}</td><td><b>${esc(x.policyNo)}</b></td><td>${esc(x.custName)}</td><td>${esc(x.company)}</td><td>${esc(x.rmName||"—")}</td>
+  $("#iBody").innerHTML=rows.length?rows.slice((IT.page-1)*IT.per,IT.page*IT.per).map(x=>`<tr class="ck" data-id="${x.policyId||x.id}"><td>${fmtD(x.date)}</td><td><b>${esc(x.policyNo)}</b>${x._inst?' <span class="bd bl">Renewal</span>':""}</td><td>${esc(x.custName)}</td><td>${esc(x.company)}</td><td>${esc(x.rmName||"—")}</td>
     ${ci?`<td class="r">${inr(x.premiumCollected)}</td><td class="r">${inr(x.commission)}</td><td class="r">${inr(x.brokerage)}</td>`:""}${cp?`<td class="r">${inr(x.payoutRM)}</td>`:""}${ci?`<td class="r"><b style="color:${num(x.netIncome)<0?"var(--er)":"var(--ok)"}">${inr(x.netIncome)}</b></td>`:""}
     <td>${esc(x.payMethod||"—")}</td><td>${esc(x.payRef||"—")}</td></tr>`).join(""):emptyRow(cols,"No income records for these filters.");
   $("#iPager").innerHTML=`<span>${rows.length.toLocaleString("en-IN")} records</span><div><button class="btn sm" data-pg="prev" ${IT.page<=1?"disabled":""}>‹ Prev</button><span>Page ${IT.page} / ${pages}</span><button class="btn sm" data-pg="next" ${IT.page>=pages?"disabled":""}>Next ›</button></div>`;
@@ -1612,13 +1843,13 @@ function renderRenewals(){
   <tbody>${list.length?list.map(r=>`<tr data-id="${r.p.id}" data-due="${r.due}"><td><b>${fmtD(r.due)}</b></td><td>${dueBadge(r.days)}</td><td>${r.kind==="Maturity"?'<span class="bd bl">Maturity</span>':esc(r.kind)}</td><td>${esc(r.p.policyNo)}</td><td class="nm"><b>${esc(r.p.custName)}</b></td><td>${esc(r.p.phone||"—")}</td>
     <td class="nm"><b>${esc(r.p.company)}</b><small>${esc(r.p.plan||"")}</small></td><td>${catBadge(r.p.category)}</td><td class="r"><b>${inr(r.p.premium)}</b></td><td>${esc(r.p.rmName||"—")}</td>
     <td>${r.reminded?`<span class="bd gr">${I("check")}Reminded</span>`:`<span class="bd gy">Pending</span>`}</td>
-    <td><div class="acts"><button class="btn sm" data-a="wa" title="WhatsApp">${I("msg")}WhatsApp</button>${r.reminded?"":`<button class="btn sm" data-a="mark">${I("check")}Mark</button>`}${r.kind==="Maturity"?(can("canEditPolicy")?`<button class="btn sm p" data-a="mature">${I("flag")}Matured</button>`:""):cr?`<button class="btn sm p" data-a="renew">${I("renew")}Renew</button>`:""}<button class="btn g ic" data-a="view">${I("eye")}</button></div></td></tr>`).join(""):emptyRow(12,"Nothing in this window. 🎉")}</tbody></table></div></div>
+    <td><div class="acts"><button class="btn sm" data-a="wa" title="WhatsApp">${I("msg")}WhatsApp</button>${r.reminded?"":`<button class="btn sm" data-a="mark">${I("check")}Mark</button>`}${r.kind==="Maturity"?(can("canEditPolicy")?`<button class="btn sm p" data-a="mature">${I("flag")}Matured</button>`:""):(r.kind==="Premium"||r.kind==="Instalment")?(can("canEditPolicy")?`<button class="btn sm p" data-a="pay">${I("rupee")}Paid</button>`:""):cr?`<button class="btn sm p" data-a="renew">${I("renew")}Renew</button>`:""}<button class="btn g ic" data-a="view">${I("eye")}</button></div></td></tr>`).join(""):emptyRow(12,"Nothing in this window. 🎉")}</tbody></table></div></div>
   <p class="mu" style="font-size:12px;margin-top:10px">Life premiums roll forward by frequency and Life maturities (including paid-up policies) show as <b>Maturity</b>; Health/Motor show the renewal date. Closed policies (cancelled, matured, surrendered, claim settled) never appear here. Wire automatic WhatsApp/SMS/email in <code>sendReminderAPI()</code>.</p>`;
   el.querySelector(".tabs").onclick=e=>{ const b=e.target.closest("[data-b]"); if(b){ RT.b=b.dataset.b; renderRenewals(); } };
   $("#rShow").onchange=e=>{ RT.showRem=e.target.checked; renderRenewals(); };
   $("#rExp")&&($("#rExp").onclick=()=>xlsxDownload(list.map(r=>({"Due Date":r.due,"Days":r.days,"Policy No":r.p.policyNo,"Customer":r.p.custName,"Phone":r.p.phone,"Company":r.p.company,"Plan":r.p.plan,"Type":r.p.category,"Premium":num(r.p.premium),"Due For":r.kind,"RM":r.p.rmName,"Reminded":r.reminded?"Yes":"No"})),lobFile("Renewals")));
   el.querySelector("tbody").onclick=e=>{ const tr=e.target.closest("tr[data-id]"); if(!tr) return; const p=S.policies[tr.dataset.id], due=tr.dataset.due, a=e.target.closest("[data-a]")?.dataset.a;
-    if(a==="wa") openWhatsApp(p,due); if(a==="mark") markReminded(p,due); if(a==="mature") openStatusModal(p,"Matured"); if(a==="renew") openPolicy("renew",p); if(a==="view") openPolicy("view",p); };
+    if(a==="wa") openWhatsApp(p,due); if(a==="mark") markReminded(p,due); if(a==="mature") openStatusModal(p,"Matured"); if(a==="pay") openPayment(p,due); if(a==="renew") openPolicy("renew",p); if(a==="view") openPolicy("view",p); };
 }
 
 /* ================================ POLICY LIFECYCLE (status changes) ================================
@@ -1626,8 +1857,8 @@ function renderRenewals(){
    Health / Motor / Other : Cancelled · Lapsed (not renewed) · Reactivate → Active
    Closed statuses never show in renewal reminders. Health / Motor stay Active after a claim and renew as usual.
    Paid-up life policies stop premium reminders but still show their Maturity date. */
-const CLOSED_ST = ["Cancelled","Matured","Surrendered","Claim Settled"];
-const ALL_ST = ["Active","Lapsed","Paid-up","Renewed","Cancelled","Matured","Surrendered","Claim Settled"];
+const CLOSED_ST = ["Cancelled","Matured","Surrendered","Claim Settled","Ported Out"];
+const ALL_ST = ["Upcoming","Active","Lapsed","Paid-up","Renewed","Cancelled","Matured","Surrendered","Claim Settled","Ported Out"];
 const LIFE_ST_ACTIONS = [
   ["Paid-up","Make Paid-up","Paid-up sum assured (₹)"],
   ["Surrendered","Surrender","Surrender value received (₹)"],
@@ -1637,7 +1868,8 @@ const LIFE_ST_ACTIONS = [
   ["Active","Revive / Reinstate",""]
 ];
 const GEN_ST_ACTIONS = [
-  ["Cancelled","Cancel policy","Refund amount (₹)"],
+  ["Cancelled","Cancel policy / application","Refund amount (₹)"],
+  ["Ported Out","Ported out / moved to other agent",""],
   ["Lapsed","Mark Lapsed (not renewed)",""],
   ["Active","Reactivate",""]
 ];
@@ -1647,12 +1879,12 @@ const isClosed = s => CLOSED_ST.includes(s);
 
 function openStatusModal(p, preset=""){
   if(!can("canEditPolicy")) return toast("You don't have permission to change policy status.","er");
-  const acts=(isLife(p.category)?LIFE_ST_ACTIONS:GEN_ST_ACTIONS).filter(a=>a[0]!==p.status);
+  const acts=(isLife(p.category)?LIFE_ST_ACTIONS:GEN_ST_ACTIONS).filter(a=>a[0]!==p.status&&!(a[0]==="Active"&&p.status==="Upcoming"));
   const sel=preset&&acts.some(a=>a[0]===preset)?preset:acts[0][0];
   const m=openModal({title:`Change status · ${esc(p.policyNo)}`,body:`
     <div class="note" style="margin-bottom:14px"><b>${esc(p.custName)}</b> · ${esc(p.company)} · ${catBadge(p.category)} · now ${statusBadge(p.status)}</div>
     <div class="fg" style="grid-template-columns:1fr 1fr">
-      <label class="f w2">New status<select class="in" id="stAct">${acts.map(a=>`<option value="${esc(a[0])}" ${a[0]===sel?"selected":""}>${esc(a[1])} → ${esc(a[0])}</option>`).join("")}</select></label>
+      <label class="f w2">New status<select class="in" id="stAct">${acts.map(a=>`<option value="${esc(a[0])}" ${a[0]===sel?"selected":""}>${esc(a[1])} → ${esc(stLabel(a[0]))}</option>`).join("")}</select></label>
       <label class="f">Effective date<input class="in" type="date" id="stDate" value="${today()}"></label>
       <label class="f" id="stAmtL"><span id="stAmtT">Amount</span><input class="in" type="number" step="any" id="stAmt"></label>
       <label class="f" id="stRefL">Payment ref / UTR<input class="in" id="stRef"></label>
@@ -1665,7 +1897,7 @@ function openStatusModal(p, preset=""){
     $("#stInfo",m).innerHTML = isClosed(a[0]) ? `This <b>closes</b> the policy — it will no longer appear in renewal reminders.`
       : a[0]==="Paid-up" ? "Paid-up: no further premiums are due, so premium reminders stop. The policy stays in force and its maturity date still shows in Renewals."
       : a[0]==="Lapsed" ? "Lapsed policies stop showing in reminders. Use Revive / Reactivate if the customer pays later."
-      : "The policy becomes Active again and renewal reminders resume."; };
+      : "The policy becomes In-force again and renewal reminders resume."; };
   $("#stAct",m).onchange=upd; upd();
   m.querySelector("[data-c]").onclick=()=>m._close(true);
   $("#stSave",m).onclick=async()=>{
@@ -1685,7 +1917,7 @@ function openStatusModal(p, preset=""){
 function policyExtras(p){
   const cl=Object.values(S.claims).filter(c=>c.policyId===p.id).sort((a,b)=>String(b.intimationDate||"").localeCompare(String(a.intimationDate||"")));
   const h=[...(p.statusHistory||[])].reverse();
-  return `<div class="sec"><h4>Claims</h4>${cl.length?`<div class="tw"><table class="tbl"><thead><tr><th>Claim No</th><th>Intimated</th><th>Claim type</th><th class="r">Claimed</th><th class="r">Settled</th><th>Status</th></tr></thead><tbody>${cl.map(c=>`<tr class="ck" data-claim="${c.id}"><td><b>${esc(c.claimNo||"—")}</b></td><td>${fmtD(c.intimationDate)}</td><td>${esc(c.claimType)}</td><td class="r">${inr(c.claimAmount)}</td><td class="r">${c.settledAmount?inr(c.settledAmount):"—"}</td><td>${claimBadge(c.status)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="mu" style="font-size:13px">No claims on this policy.</p>`}</div>
+  return `${payHistory(p)}<div class="sec"><h4>Claims</h4>${cl.length?`<div class="tw"><table class="tbl"><thead><tr><th>Claim No</th><th>Intimated</th><th>Claim type</th><th class="r">Claimed</th><th class="r">Settled</th><th>Status</th></tr></thead><tbody>${cl.map(c=>`<tr class="ck" data-claim="${c.id}"><td><b>${esc(c.claimNo||"—")}</b></td><td>${fmtD(c.intimationDate)}</td><td>${esc(c.claimType)}</td><td class="r">${inr(c.claimAmount)}</td><td class="r">${c.settledAmount?inr(c.settledAmount):"—"}</td><td>${claimBadge(c.status)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="mu" style="font-size:13px">No claims on this policy.</p>`}</div>
   ${h.length?`<div class="sec"><h4>Status history</h4>${h.map(x=>`<div class="list-i"><div class="tx"><b>${esc(x.from||"—")} → ${esc(x.status)} · ${fmtD(x.date)}</b><small>${[x.amount!==""&&x.amount!=null?inr(x.amount):"",x.ref,x.note,`by ${x.by} · ${fmtTs(x.at)}`].filter(Boolean).map(esc).join(" · ")}</small></div>${statusBadge(x.status)}</div>`).join("")}</div>`:""}`;
 }
 
@@ -1897,11 +2129,15 @@ let _lblQ=false;
 new MutationObserver(()=>{ if(_lblQ) return; _lblQ=true; requestAnimationFrame(()=>{ _lblQ=false; labelTables(); }); }).observe(document.body,{childList:true,subtree:true});
 
 /* ================================ BULK UPLOAD / EXPORT ================================ */
-const SYN={policyNo:["policyno","policynumber","polno","policy"],company:["company","insurer","insurancecompany","companyname"],category:["category","type","policytype","lob","product"],plan:["plan","planname","policyname","productname","scheme"],
-  sumAssured:["sumassured","suminsured","sa","si","cover"],premium:["premium","premiumamount","totalpremium","grosspremium"],frequency:["frequency","mode","premiummode","paymentfrequency"],startDate:["startdate","policystartdate","commencementdate","riskstartdate","dateofcommencement","doc","issuedate"],
+const SYN={appNo:["applicationno","appno","proposalno","applicationnumber","proposalnumber"],loginDate:["logindate","proposaldate","applicationdate","login"],
+  issueDate:["issuedate","policyissuedate","dateofissue"],bizType:["businesstype","biztype","newrenewal"],pan:["pan","panno","pannumber"],
+  policyTerm:["policyterm","term","pt","tenure"],ppt:["ppt","premiumpayingterm","payingterm"],basePremium:["netpremium","basepremium","premiumexclgst","premiumwithoutgst"],
+  gstPct:["gst%","gstrate","gstpercent","taxrate"],gstAmount:["gst","gstamount","servicetax","tax"],odPremium:["odpremium","owndamage","od"],tpPremium:["tppremium","thirdparty","tp"],
+  prevInsurer:["previousinsurer","previnsurer"],prevPolicyNo:["previouspolicyno","prevpolicyno","oldpolicyno"],policyNo:["policyno","policynumber","polno","policy"],company:["company","insurer","insurancecompany","companyname"],category:["category","type","policytype","lob","product"],plan:["plan","planname","policyname","productname","scheme"],
+  sumAssured:["sumassured","suminsured","sa","si","cover"],premium:["premium","premiumamount","totalpremium","grosspremium"],frequency:["frequency","mode","premiummode","paymentfrequency"],startDate:["startdate","policystartdate","commencementdate","riskstartdate","dateofcommencement","doc"],
   endDate:["enddate","maturitydate","expirydate","policyenddate","riskenddate"],status:["status","policystatus"],custName:["customername","name","insuredname","clientname","policyholder","proposername","customer"],dob:["dob","dateofbirth","birthdate"],
   gender:["gender","sex"],phone:["phone","mobile","mobileno","contact","phoneno","contactno"],email:["email","emailid","mail"],address:["address","addr"],nomineeName:["nominee","nomineename"],nomineeRelation:["nomineerelation","relation","relationship"],
-  kycType:["kyctype","idtype"],kycNo:["kycno","idno","pan","aadhaar","kycnumber","idnumber"],vehNo:["vehicleno","vehiclenumber","regno","registrationno","registrationnumber"],vehMake:["make","vehiclemake"],vehModel:["model","vehiclemodel"],vehYear:["year","mfgyear","manufacturingyear"],
+  kycType:["kyctype","idtype"],kycNo:["kycno","idno","aadhaar","kycnumber","idnumber"],vehNo:["vehicleno","vehiclenumber","regno","registrationno","registrationnumber"],vehMake:["make","vehiclemake"],vehModel:["model","vehiclemodel"],vehYear:["year","mfgyear","manufacturingyear"],
   engineNo:["engineno","enginenumber"],chassisNo:["chassisno","chassisnumber"],idv:["idv"],rmName:["rm","rmname","agent","agentname","relationshipmanager"],rmCode:["rmcode","agentcode"],branch:["branch"],commPct:["commission%","commissionpercent","commpct","commissionrate"],
   premiumCollected:["premiumcollected","collected","amountcollected"],commission:["commission","agentcommission","income","commissionamount"],brokerage:["brokerage","incentive"],payoutRM:["payout","payouttorm","rmpayout"],payMethod:["paymentmethod","paymentmode","paymode"],payRef:["paymentref","transactionid","txnid","refno","chequeno","utr"]};
 const norm = s => String(s||"").toLowerCase().replace(/[^a-z0-9%]/g,"");
@@ -1933,7 +2169,7 @@ function renderBulk(){
   drop.ondragover=e=>{ e.preventDefault(); drop.classList.add("ov"); }; drop.ondragleave=()=>drop.classList.remove("ov");
   drop.ondrop=e=>{ e.preventDefault(); drop.classList.remove("ov"); e.dataTransfer.files[0]&&readSheet(e.dataTransfer.files[0]); };
   inp.onchange=()=>inp.files[0]&&readSheet(inp.files[0]);
-  $("#bTpl").onclick=()=>{ const fs=IMPORT_FIELDS(); const sample={policyNo:"POL123456",company:S.settings.companies[0]?.name||"ABC General Insurance",category:"Motor",plan:"Private Car Package",sumAssured:500000,premium:12500,frequency:"Yearly",startDate:"01/04/2026",endDate:"31/03/2027",status:"Active",custName:"Rahul Sharma",dob:"15/08/1985",gender:"Male",phone:"9876543210",email:"rahul@example.com",vehNo:"OD02AB1234",rmName:S.settings.rms[0]?.name||"",commPct:15,commission:1875,payoutRM:500,payMethod:"UPI"};
+  $("#bTpl").onclick=()=>{ const fs=IMPORT_FIELDS(); const sample={appNo:"APP998877",loginDate:"25/03/2026",issueDate:"30/03/2026",bizType:"Fresh",pan:"ABCDE1234F",policyTerm:1,basePremium:10593,gstPct:18,gstAmount:1907,policyNo:"POL123456",company:S.settings.companies[0]?.name||"ABC General Insurance",category:"Motor",plan:"Private Car Package",sumAssured:500000,premium:12500,frequency:"Yearly",startDate:"01/04/2026",endDate:"31/03/2027",status:"Active",custName:"Rahul Sharma",dob:"15/08/1985",gender:"Male",phone:"9876543210",email:"rahul@example.com",vehNo:"OD02AB1234",rmName:S.settings.rms[0]?.name||"",commPct:15,commission:1875,payoutRM:500,payMethod:"UPI"};
     const ws=XLSX.utils.aoa_to_sheet([fs.map(f=>f.l),fs.map(f=>sample[f.k]??"")]); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Policies"); XLSX.writeFile(wb,"Policy_Import_Template.xlsx"); };
   if(BU) renderMapping();
 }
@@ -1970,15 +2206,18 @@ function buildRow(raw){
   if(o.company){ const c=S.settings.companies.find(c=>c.name.toLowerCase()===o.company.toLowerCase()); if(c) o.company=c.name; }
   if(o.rmName){ const r=S.settings.rms.find(r=>r.name.toLowerCase()===o.rmName.toLowerCase()); if(r){ o.rmName=r.name; o.rmCode??=r.code; o.branch??=r.branch; } }
   if(!o.category && S.lob!=="All") o.category=S.lob;  // rows without a type get the selected tab
-  o.status||="Active"; o.frequency||="Yearly";
-  if(!o.policyNo) errs.push("Policy Number missing"); if(!o.custName) errs.push("Customer Name missing");
+  o.frequency||="Yearly";
+  if(!filled(o.premium)&&filled(o.basePremium)) o.premium=r2(num(o.basePremium)*(1+num(o.gstPct)/100));
+  if(/^in-?force$/i.test(o.status||"")) o.status="Active";
+  if(!o.status) o.status=autoStatus(o,"");   // no policy no. / start date → Upcoming
+  if(!o.policyNo&&!o.appNo) errs.push("Policy No. or Application No. missing"); if(!o.custName) errs.push("Customer Name missing");
   return {o,errs};
 }
 function validateBulk(){
   const box=$("#bVal"); if(!box) return;
-  const existing={}; Object.values(S.policies).forEach(p=>existing[String(p.policyNo).toLowerCase()]=p.id);
+  const existing={}; Object.values(S.policies).forEach(p=>{ if(p.policyNo) existing[String(p.policyNo).toLowerCase()]=p.id; if(p.appNo) existing["app:"+String(p.appNo).toLowerCase()]=p.id; });
   const seen=new Set(); const ok=[], bad=[]; let dups=0;
-  BU.rows.forEach((raw,i)=>{ const {o,errs}=buildRow(raw); const key=String(o.policyNo||"").toLowerCase();
+  BU.rows.forEach((raw,i)=>{ const {o,errs}=buildRow(raw); const key=o.policyNo?String(o.policyNo).toLowerCase():"app:"+String(o.appNo||"").toLowerCase();
     if(key&&seen.has(key)) errs.push("Duplicate policy number inside file"); seen.add(key);
     if(errs.length) return bad.push({i:i+2,errs});
     const ex=existing[key]; if(ex){ dups++; if(BU.skipDup||!can("canEditPolicy")) return; o._id=ex; }
@@ -2032,12 +2271,12 @@ function exportPolicies(list,name){
   if(!can("canDownloadExcel")) return;
   const cols=F.filter(fAllowed);
   xlsxDownload(list.map(p=>{ const fin=S.income[p.id]||{}, o={};
-    cols.forEach(f=>o[f.l]=f.s==="fin"?(fin[f.k]??""):f.k==="renewalDate"?nextDue(p):(p[f.k]??""));
+    cols.forEach(f=>o[f.l]=f.s==="fin"?(fin[f.k]??""):f.k==="renewalDate"?nextDue(p):f.k==="status"?stLabel(p.status):(p[f.k]??""));
     o["Documents"]=(p.docs||[]).length; o["Created By"]=p.createdByName||""; o["Created At"]=p.createdAt?new Date(p.createdAt).toLocaleString("en-IN"):""; return o; }),name);
 }
 function exportIncome(list){
   if(!can("canDownloadExcel")) return; const ci=can("canViewIncome"), cp=can("canViewPayout");
-  xlsxDownload(list.map(x=>({Date:x.date,"Policy No":x.policyNo,Customer:x.custName,Company:x.company,Type:x.category,RM:x.rmName,
+  xlsxDownload(list.map(x=>({Date:x.date,"Entry":x._inst?"Renewal instalment":"New / first premium","Policy No":x.policyNo,Customer:x.custName,Company:x.company,Type:x.category,RM:x.rmName,
     ...(ci?{"Premium Collected":num(x.premiumCollected),Commission:num(x.commission),Brokerage:num(x.brokerage)}:{}),...(cp?{"Payout to RM":num(x.payoutRM)}:{}),...(ci?{"Net Income":num(x.netIncome)}:{}),
     "Payment Method":x.payMethod||"","Payment Ref":x.payRef||""})),lobFile("Income_Payout"));
 }
