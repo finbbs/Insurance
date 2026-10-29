@@ -258,7 +258,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .ocrbar b{color:var(--k)}
 .ocrbar .sp{flex:1}
 /* toast */
-#toasts{position:fixed;right:20px;bottom:20px;z-index:100;display:flex;flex-direction:column;gap:10px}
+#toasts{position:fixed;left:20px;bottom:20px;z-index:100;display:flex;flex-direction:column;gap:10px;pointer-events:none}
+#toasts .toast{pointer-events:auto}
 .toast{background:var(--k);color:#fff;padding:12px 16px;border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.25);font-size:13.5px;display:flex;gap:12px;align-items:center;min-width:260px;max-width:420px;animation:slide .2s ease;border-left:4px solid var(--b2)}
 .toast.ok{border-left-color:#22c55e}.toast.er{border-left-color:var(--er)}.toast.wa{border-left-color:var(--o)}
 .toast button{margin-left:auto;background:var(--o);border:0;color:#fff;border-radius:8px;padding:5px 10px;font-weight:600;cursor:pointer;font-size:12.5px}
@@ -353,7 +354,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   .pager{justify-content:center}
   .mixg b{font-size:13px}
   .card{padding:14px}
-  #toasts{left:12px;right:12px;bottom:12px}.toast{min-width:0;max-width:none}
+  #toasts{left:12px;right:12px;top:12px;bottom:auto}.toast{min-width:0;max-width:none}
 }
 @media(max-width:560px){
   .mb{padding:0;align-items:stretch}
@@ -489,6 +490,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
    income extra       installments:[{due,paidOn,total,mode,ref,commission,brokerage,payoutRM}]  (renewal premiums)
    policies extra     status lifecycle: statusDate, statusHistory:[{status,from,date,amount,ref,note,by,at}],
                         closure:{type,date,amount,ref,note,claimId}, paidUp:{date,value}
+   public/branding    { name, tagline, logo, phone, email }   — shown on the login page (public read)
+   private/ocr        { proxyUrl, openaiKey, model }          — OCR settings (Settings › OCR / AI, master only)
+   settings/main      fieldRules:{ <fieldKey>:{hide,req,inf} } — Settings › Form Fields; plans[].commPct / renewalPct
    activityLog/{id}   { at, uid, name, action, target, details }
 
    ===================================== FIRESTORE RULES =====================================
@@ -545,6 +549,14 @@ service cloud.firestore {
       allow read: if can('canViewAllPolicies') || (active() && owns(resource.data));
       allow create, update: if can('canManageClaims') && (can('canViewAllPolicies') || owns(request.resource.data));
       allow delete: if isMaster();
+    }
+    match /public/{id} {            // login-page branding (logo, name) — readable before login
+      allow read: if true;
+      allow write: if can('canManageSettings');
+    }
+    match /private/{id} {           // OCR / AI settings (API key) — staff only, never in the website file
+      allow read: if active() && (can('canAddPolicy') || can('canEditPolicy'));
+      allow write: if isMaster();
     }
     match /activityLog/{id} {
       allow create: if active() && request.resource.data.uid == request.auth.uid;
@@ -714,13 +726,20 @@ const F = [
   // ---- Income & Payout (first / new premium) ----
   {s:"fin",k:"premiumCollected",l:"Premium Collected (₹)",t:"number",p:"canViewIncome"},
   {s:"fin",k:"commission",l:"Agent Commission (₹)",t:"number",p:"canViewIncome"},
-  {s:"fin",k:"brokerage",l:"Brokerage / Incentive (₹)",t:"number",p:"canViewIncome"},
+  {s:"fin",k:"brokerage",l:"Reward / Incentive (₹)",t:"number",p:"canViewIncome"},
   {s:"fin",k:"payoutRM",l:"Payout to RM (₹)",t:"number",p:"canViewPayout"},
   {s:"fin",k:"netIncome",l:"Net Income (auto)",t:"number",ro:1,p:"canViewIncome"},
   {s:"fin",k:"payMethod",l:"Payment Method",t:"select",o:()=>S.settings.paymentModes},
   {s:"fin",k:"payRef",l:"Payment Ref / Txn ID"}
 ];
 const FK = Object.fromEntries(F.map(f=>[f.k,f]));
+/* Field rules from Settings › Form Fields: hide from form / required at Stage 1 / required for In-force.
+   Hidden fields stay in the database, Excel export and import. Category & Customer Name are always required. */
+const LOCKED_F = {category:1,custName:1};
+const fr = f => { if(LOCKED_F[f.k]) return {hide:false,req:true,inf:true}; const d={hide:false,req:!!f.req,inf:!!f.inf}; const o=S.settings.fieldRules?.[f.k]; return o?{...d,...o}:d; };
+const shown = f => !fr(f).hide;
+const rq = f => { const r=fr(f); return !r.hide && r.req; };
+const infF = f => { const r=fr(f); return !r.hide && (r.req||r.inf); };
 const FIN_KEYS = F.filter(f=>f.s==="fin").map(f=>f.k);
 const SECTIONS = [["s1","Stage 1 · Login"],["cust","Customer Details"],["issue","Policy Issuance"],["prem","Premium & GST"],["motor","Motor Details"],["rm","RM / Agent"],["fin","Income & Payout"],["docs","Documents"]];
 
@@ -925,7 +944,10 @@ async function startSync(coll){
     }
     S.synced[coll]=true; setSync("ok");
     if(changed){ clearTimeout(saveT); saveT=setTimeout(()=>IDB.set(ck,cache),1500); refresh(); }
-  },err=>{ console.error(`[${coll}]`,err); setSync("er",err.code); toast(`Sync error (${coll}): ${err.code||err.message}. Check console for index link.`,"er"); });
+  },err=>{ console.error(`[${coll}]`,err); setSync("er",err.code); toast(err.code==="permission-denied"
+      ? `Can't load ${coll}: Firestore rules are out of date. Publish the latest rules (Firebase › Firestore › Rules).`
+      : err.code==="failed-precondition" ? `${coll}: a Firestore index is needed — open the browser console (F12) and click the link.`
+      : `Sync error (${coll}): ${err.code||err.message}`,"er"); });
   S.unsubs.push(un);
 }
 function setSync(st,msg){
@@ -938,7 +960,14 @@ function showLogin(err){
   $("#loader").classList.add("hidden"); $("#appView").classList.add("hidden"); $("#loginView").classList.remove("hidden");
   $("#cfgWarn").classList.toggle("hidden",CONFIG_OK);
   const e=$("#lgErr"); e.classList.toggle("hidden",!err); e.textContent=err||"";
-  try{ const b=JSON.parse(localStorage.getItem("ib_brand")||"null"); if(b){ $("#lgBrand").innerHTML=b.logo?`<div class="lg-logo"><img src="${esc(b.logo)}" alt="${esc(b.name)}"></div>`:`<div class="mark">${esc(initials(b.name))}</div><span>${esc(b.name)}</span>`; $("#lgLogoR").innerHTML=b.logo?`<img src="${esc(b.logo)}" alt="">`:""; $("#lgContact").textContent=[b.phone,b.email].filter(Boolean).join(" · "); } }catch{}
+  try{ renderLoginBrand(JSON.parse(localStorage.getItem("ib_brand")||"null")); }catch{}
+  if(CONFIG_OK) getDoc(doc(db,"public","branding")).then(sn=>{ if(sn.exists()){ const b=sn.data(); renderLoginBrand(b); try{ localStorage.setItem("ib_brand",JSON.stringify(b)); }catch{} } }).catch(()=>{});
+}
+function renderLoginBrand(b){
+  if(!b) return;
+  $("#lgBrand").innerHTML=b.logo?`<div class="lg-logo"><img src="${esc(b.logo)}" alt="${esc(b.name)}"></div>`:`<div class="mark">${esc(initials(b.name))}</div><span>${esc(b.name)}</span>`;
+  $("#lgLogoR").innerHTML=b.logo?`<img src="${esc(b.logo)}" alt="${esc(b.name)}">`:(b.name?`<b style="font-size:20px">${esc(b.name)}</b>`:"");
+  $("#lgContact").textContent=[b.phone,b.email].filter(Boolean).join(" · ");
 }
 $("#loginForm").onsubmit=async e=>{
   e.preventDefault(); if(!CONFIG_OK) return;
@@ -1019,6 +1048,9 @@ function applyBranding(){
   $("#sbFoot").innerHTML=[b.phone,b.email,b.address].filter(Boolean).map(esc).join("<br>") || "© "+new Date().getFullYear();
   document.title=`${b.name} · Back Office`;
   try{ localStorage.setItem("ib_brand",JSON.stringify({name:b.name,logo:b.logo,phone:b.phone,email:b.email})); }catch{}
+  // publish logo + name to public/branding so the login page shows it on every device (before login)
+  if(can("canManageSettings")){ const pub={name:b.name||"",tagline:b.tagline||"",logo:b.logo||"",phone:b.phone||"",email:b.email||""}, h=JSON.stringify(pub);
+    if(S._pubB!==h){ S._pubB=h; setDoc(doc(db,"public","branding"),pub).catch(e=>console.warn("public branding:",e.code)); } }
 }
 
 /* ================================ ROUTER ================================ */
@@ -1073,7 +1105,6 @@ $("#avBtn").onclick=()=>{
   if($(".dd")){ closeDD(); return; }
   const dd=document.createElement("div"); dd.className="dd dd-u";
   dd.innerHTML=`<div class="dd-h"><div><b>${esc(S.profile.name||"")}</b><br><small class="mu">${esc(S.user.email)} · ${isMaster()?"Master":"User"}</small></div></div>
-  <div class="dd-i" data-a="resync">${I("refresh")} Resync data from server</div>
   <div class="dd-i" data-a="pwd">${I("key")} Change password (email link)</div>
   <div class="dd-i" data-a="out" style="color:var(--er)">${I("logout")} Logout</div>`;
   dd.onclick=async e=>{ const a=e.target.closest("[data-a]")?.dataset.a; if(!a) return; closeDD();
@@ -1330,8 +1361,8 @@ const draftKey = id => `ib_draft:${S.user?.uid}:${id}`;
 let M=null; // current modal state
 const filled = v => v!=="" && v!=null;
 const showField = (f,cat) => !f.only || (f.only==="life"?isLife(cat):f.only==="motor"?isMotor(cat):f.only==="health"?isHealth(cat):true);
-const polSteps = cat => SECTIONS.filter(([k])=>(k!=="fin"||finAny())&&(k!=="motor"||isMotor(cat)));
-const missingInforce = d => F.filter(f=>f.inf&&!filled(d[f.k])).map(f=>f.l);
+const polSteps = cat => SECTIONS.filter(([k])=>(k!=="fin"||finAny())&&(k!=="motor"||isMotor(cat))&&(k==="docs"||F.some(f=>f.s===k&&shown(f)&&fAllowed(f)&&!f.ro&&!f.formRo)));
+const missingInforce = d => F.filter(f=>infF(f)&&fAllowed(f)&&showField(f,d.category)&&!filled(d[f.k])).map(f=>f.l);
 function autoStatus(d,prev){ const ok=!missingInforce(d).length; if(!prev||prev==="Upcoming"||prev==="Active") return ok?"Active":"Upcoming"; return prev; }
 const addDays = (s,n) => { const d=new Date(s+"T00:00:00"); d.setDate(d.getDate()+n); return ymd(d); };
 const GST_CUTOFF = "2025-09-22";   // individual life & health insurance premiums are GST-exempt from this date
@@ -1342,7 +1373,7 @@ const isInstalment = p => !isClosed(p.status) && p.status!=="Upcoming" && p.stat
 
 function fieldHTML(f,v,ro){
   const id="pf_"+f.k, lock=ro||f.ro||f.formRo;
-  const req=f.req?'<span class="req">*</span>':f.inf?'<span class="req" title="Needed for In-force">•</span>':"";
+  const req=rq(f)?'<span class="req">*</span>':infF(f)?'<span class="req" title="Needed for In-force">•</span>':"";
   v = v ?? "";
   let ctl;
   if(f.t==="select"){
@@ -1375,11 +1406,11 @@ function openPolicy(mode,p={},step=0){
   if(dk){ try{ const dr=JSON.parse(localStorage.getItem(dk)||"null"); if(dr){ data={...data,...dr}; restored=true; } }catch{} }
   M={mode,p,dk,dirty:false,savedId:mode==="edit"?p.id:null,step,steps:polSteps(data.category),
      docs:(mode==="edit"||ro)?[...(p.docs||[])]:[],removed:[],pending:[],
-     commManual:filled(data.commission),endTouched:filled(data.endDate)&&mode!=="renew",gstTouched:filled(data.gstAmount),baseTouched:filled(data.basePremium)&&!filled(data.odPremium)};
+     commManual:filled(data.commission),pctManual:filled(data.commPct)&&mode==="edit",endTouched:filled(data.endDate)&&mode!=="renew",gstTouched:filled(data.gstAmount),baseTouched:filled(data.basePremium)&&!filled(data.odPremium)};
   const secs = ro ? polSteps(data.category) : SECTIONS.filter(([k])=>k!=="fin"||finAny());
   const sectionHTML=([k,t])=>`<div class="sec ${k==="motor"?"js-motor":""}" id="sec_${k}"><h4>${t}</h4>${k==="docs"
       ?`<div class="dgrid">${DOC_TYPES.map(dt=>`<div class="dslot" data-type="${dt}"><div class="dslot-h"><b>${dt}</b>${ro?"":`<button type="button" class="btn sm" data-docadd="${dt}">${I("clip")}Attach</button>`}</div><div class="dlist"></div></div>`).join("")}</div>`
-      :`<div class="fg">${F.filter(f=>f.s===k&&fAllowed(f)).map(f=>fieldHTML(f,data[f.k],ro)).join("")}</div>${k==="prem"?`<div class="note" id="premTot" style="margin-top:12px"></div><p class="mu" style="font-size:12px;margin-top:8px">Multi-year Health / Motor paid upfront → choose frequency <b>Single</b>. GST default: Motor 18% · individual Life &amp; Health 0% from 22-Sep-2025 (older policies: enter the GST you charged).</p>`:""}`}</div>`;
+      :`<div class="fg">${F.filter(f=>f.s===k&&fAllowed(f)&&(ro||shown(f))).map(f=>fieldHTML(f,data[f.k],ro)).join("")}</div>${k==="prem"?`<div class="note" id="premTot" style="margin-top:12px"></div><p class="mu" style="font-size:12px;margin-top:8px">Multi-year Health / Motor paid upfront → choose frequency <b>Single</b>. GST default: Motor 18% · individual Life &amp; Health 0% from 22-Sep-2025 (older policies: enter the GST you charged).</p>`:""}`}</div>`;
   const miss=missingInforce(data);
   const created = p.id?`<div class="note">Created by <b>${esc(p.createdByName||"—")}</b> on ${fmtTs(p.createdAt)} · Last updated ${fmtTs(p.updatedAt)}${p.remindedFor?` · Reminded for ${fmtD(p.remindedFor)}`:""}${p.renewOf?" · Renewal of an earlier policy":""}</div>`:"";
   const body = ro ? `
@@ -1393,7 +1424,7 @@ function openPolicy(mode,p={},step=0){
   const inst=ro&&isInstalment(p);
   const footer = ro
     ? `<span class="sp"></span>${can("canManageClaims")&&p.id&&p.status!=="Upcoming"?`<button class="btn" data-m="claim">${I("claim")}Claim</button>`:""}${can("canEditPolicy")&&p.id?`<button class="btn" data-m="status">${I("flag")}Status</button>`:""}${can("canEditPolicy")?`<button class="btn" data-m="edit">${I("edit")}${p.status==="Upcoming"?"Complete details":"Edit"}</button>`:""}${can("canEditPolicy")&&inst?`<button class="btn" data-m="pay">${I("rupee")}Record Premium</button>`:""}${can("canAddPolicy")&&can("canEditPolicy")&&!inst&&!isClosed(p.status)&&p.status!=="Upcoming"?`<button class="btn" data-m="renew">${I("renew")}Renew</button>`:""}<button class="btn p" data-m="close">Close</button>`
-    : `<span class="mu" id="saveState" style="font-size:12px">${restored?"Draft restored":"Auto-saving draft"}</span><span class="sp"></span><button class="btn" data-m="cancel">Cancel</button><button class="btn" data-m="back">‹ Back</button><button class="btn" data-m="saveclose">Save &amp; Close</button><button class="btn p" data-m="next" id="saveBtn">Save &amp; Next ›</button>`;
+    : `<span class="mu" id="saveState" style="font-size:12px">${restored?"Draft restored":"Auto-saving draft"}</span><span class="sp"></span><button class="btn p" data-m="next" id="saveBtn">Save &amp; Next ›</button>`;
   const m=openModal({title,body,footer,wide:true,onClose:async()=>{
     if(ro||!M?.dirty) return true;
     const ok=await confirmBox("Discard unsaved changes? (Your draft will be deleted.)","Discard",true);
@@ -1426,13 +1457,15 @@ function openPolicy(mode,p={},step=0){
     form.addEventListener("input",e=>{ const n=e.target.name; M.dirty=true;
       if(n==="pan"){ const c=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); try{ e.target.setSelectionRange(c,c); }catch{} }
       if(n==="commission") M.commManual=!!e.target.value;
+      if(n==="commPct") M.pctManual=!!e.target.value;
       if(n==="endDate") M.endTouched=!!e.target.value;
       if(n==="gstAmount") M.gstTouched=!!e.target.value;
       if(n==="basePremium") M.baseTouched=!!e.target.value;
       recalc(n); saveDraft(); wzLater(); });
     form.addEventListener("change",e=>{ const n=e.target.name; M.dirty=true;
       if(n==="category"){ M.refresh(); fillPlans(); } if(n==="company") fillPlans();
-      if(n==="rmName"){ const r=S.settings.rms.find(x=>x.name===e.target.value); if(r){ setVal("rmCode",r.code||""); setVal("branch",r.branch||""); if(r.commPct!==""&&r.commPct!=null) setVal("commPct",r.commPct); } }
+      if(n==="rmName"){ const r=S.settings.rms.find(x=>x.name===e.target.value); if(r){ setVal("rmCode",r.code||""); setVal("branch",r.branch||""); } }
+      if(["rmName","plan","company","category"].includes(n)) applyRate();
       recalc(n); saveDraft(); wzRender(); });
     recalc("init");
     $("#ocrBtn",m).onclick=()=>{ const inp=$("#ocrInput"); inp.value=""; inp.onchange=()=>inp.files[0]&&doOCR(inp.files[0]); inp.click(); };
@@ -1446,8 +1479,8 @@ function openPolicy(mode,p={},step=0){
 }
 function stepDone(k,d){
   if(k==="docs") return M.docs.filter(x=>!M.removed.includes(x)).length+M.pending.length>0;
-  const fs=F.filter(f=>f.s===k&&fAllowed(f)&&showField(f,d.category)&&!f.ro&&!f.formRo); if(!fs.length) return false;
-  const need=fs.filter(f=>f.req||f.inf), AUTO=["frequency","gstPct","gstAmount","bizType","premiumCollected","payMethod"];   // defaults / auto-filled don't count
+  const fs=F.filter(f=>f.s===k&&fAllowed(f)&&shown(f)&&showField(f,d.category)&&!f.ro&&!f.formRo); if(!fs.length) return false;
+  const need=fs.filter(f=>rq(f)||infF(f)), AUTO=["frequency","gstPct","gstAmount","bizType","premiumCollected","payMethod"];   // defaults / auto-filled don't count
   return need.length ? need.every(f=>filled(d[f.k])) : fs.some(f=>!AUTO.includes(f.k)&&filled(d[f.k]));
 }
 function wzRender(){
@@ -1475,6 +1508,11 @@ function fillPlans(){
   dl.innerHTML=S.settings.plans.filter(p=>(!c||p.company===c)&&(!cat||p.category===cat)).map(p=>`<option value="${esc(p.name)}">`).join("");
 }
 const r2 = n => Math.round(n*100)/100;
+/* Base commission % comes from the plan (Settings › Plans); if the plan has none, from the RM's default % */
+const findPlan = (name,co,cat) => S.settings.plans.find(p=>p.name===name&&(!co||p.company===co)&&(!cat||!p.category||p.category===cat)) || S.settings.plans.find(p=>p.name===name&&(!co||p.company===co));
+function planRate(){ const pl=findPlan(val("plan"),val("company"),val("category")); const rm=S.settings.rms.find(x=>x.name===val("rmName"));
+  return pl&&filled(pl.commPct)?pl.commPct:(rm&&filled(rm.commPct)?rm.commPct:""); }
+function applyRate(){ if(!M.pctManual && $("#pf_commPct")){ const r=planRate(); if(r!=="") setVal("commPct",r); } recalc("commPct"); }
 function recalc(src){
   if(!M) return; const cat=val("category");
   // maturity / expiry from risk start + term (Life: same date; Health/Motor: one day before)
@@ -1495,7 +1533,8 @@ function recalc(src){
   const pt=$("#premTot"); if(pt) pt.innerHTML=`Total premium (incl. GST): <b>${val("premium")!==""?inr(val("premium")):"—"}</b>${val("gstAmount")!==""?` · GST ${inr(val("gstAmount"))}`:""}${val("basePremium")!==""?` · Net ${inr(val("basePremium"))}`:""} <span class="mu">— this total also shows in Stage 1</span>`;
   if(!$("#pf_netIncome")&&!$("#pf_commission")) return;
   const base=val("basePremium")!==""?num(val("basePremium")):num(val("premium"));   // commission is on premium excl. GST
-  if(["premium","basePremium","commPct","init"].includes(src) && !M.commManual && $("#pf_commission") && val("commPct")!=="" && base) setVal("commission",Math.round(base*num(val("commPct"))/100));
+  const pctV=$("#pf_commPct")?val("commPct"):planRate();   // works even if "Commission %" is hidden from the form
+  if(["premium","basePremium","commPct","init"].includes(src) && !M.commManual && $("#pf_commission") && pctV!=="" && base) setVal("commission",Math.round(base*num(pctV)/100));
   if(src==="premium" && $("#pf_premiumCollected") && !$("#pf_premiumCollected").dataset.touched) setVal("premiumCollected",val("premium"));
   if(src==="premiumCollected") $("#pf_premiumCollected").dataset.touched=1;
   const payout = $("#pf_payoutRM") ? num(val("payoutRM")) : num(S.income[M?.p?.id]?.payoutRM);
@@ -1537,7 +1576,7 @@ async function uploadFile(policyId,type,file){
 async function savePolicy(opts={}){
   const m=M.el, d=collect();
   $$(".in.bad",m).forEach(e=>e.classList.remove("bad"));
-  const miss=F.filter(f=>f.req&&fAllowed(f)&&!filled(d[f.k]));
+  const miss=F.filter(f=>rq(f)&&fAllowed(f)&&showField(f,d.category)&&!filled(d[f.k]));
   if(!filled(d.appNo)&&!filled(d.policyNo)) miss.unshift(FK.appNo);
   if(miss.length){
     miss.forEach(f=>$("#pf_"+f.k,m)?.classList.add("bad"));
@@ -1614,6 +1653,8 @@ function openPayment(p,due){
   due = due || nextDue(p);
   const fin=can("canViewIncome"), pay=can("canViewPayout");
   const base=filled(p.basePremium)?num(p.basePremium):"";
+  const pl=findPlan(p.plan,p.company,p.category), renR=pl&&filled(pl.renewalPct)?num(pl.renewalPct):"";
+  const defComm=renR!==""?Math.round((base!==""?base:num(p.premium))*renR/100):"";
   const m=openModal({title:`Record premium · ${esc(polLabel(p))}`,body:`
     <div class="note" style="margin-bottom:14px"><b>${esc(p.custName)}</b> · ${esc(p.company)} · ${esc(p.plan||"")} · ${esc(p.frequency||"")}<br><span class="mu">Same policy number — this is an instalment, not a new policy.</span></div>
     <div class="fg">
@@ -1626,7 +1667,7 @@ function openPayment(p,due){
       <label class="f">Payment ref / UTR<input class="in" id="pyRef"></label>
       <label class="f">Receipt no.<input class="in" id="pyRcpt"></label>
       <label class="f">Receipt (image / PDF)<input class="in" type="file" id="pyFile" accept="image/*,application/pdf" style="padding-top:7px"></label>
-      ${fin?`<label class="f">Renewal commission (₹)<input class="in" type="number" step="any" id="pyComm"></label><label class="f">Brokerage / incentive (₹)<input class="in" type="number" step="any" id="pyBrk"></label>`:""}
+      ${fin?`<label class="f">Renewal commission (₹)<input class="in" type="number" step="any" id="pyComm" value="${defComm}"></label><label class="f">Reward / incentive (₹)<input class="in" type="number" step="any" id="pyBrk"></label>`:""}
       ${pay?`<label class="f">Payout to RM (₹)<input class="in" type="number" step="any" id="pyPay"></label>`:""}
     </div>
     ${payHistory(p)}`,
@@ -1685,34 +1726,43 @@ Omit keys you cannot find. Do not guess.`;
  * 3) google    : Cloud Vision TEXT_DETECTION + regex parser — PASTE KEY in OCR_CONFIG.googleVisionKey
  * (Mindee / Azure Document Intelligence: add another branch here returning the same object shape.)
  */
+/* OCR settings: Settings › OCR / AI (Firestore private/ocr) override the OCR_CONFIG defaults in this file */
+async function ocrCfg(){
+  if(S.ocrCfg) return S.ocrCfg;
+  const c={...OCR_CONFIG};
+  try{ const sn=await getDoc(doc(db,"private","ocr")); if(sn.exists()){ const x=sn.data(); if(x.proxyUrl) c.proxyUrl=x.proxyUrl; if(x.openaiKey){ c.openaiKey=x.openaiKey; c.provider="openai"; } if(x.model) c.openaiModel=x.model; } }
+  catch(e){ console.warn("OCR settings:",e.code); }
+  return (S.ocrCfg=c);
+}
 async function runOCR(file){
+  const OC=await ocrCfg();
   let f=file; if(f.type.startsWith("image/")) f=await compressImage(f,2000,.85);
   const dataUrl=await fileToDataURL(f);
-  if(OCR_CONFIG.proxyUrl){
+  if(OC.proxyUrl){
     const idToken=await auth.currentUser.getIdToken();
     const payload=JSON.stringify({file:dataUrl,name:f.name,mime:f.type,prompt:ocrPrompt(),idToken});
-    const gas=/script\.google(usercontent)?\.com/.test(OCR_CONFIG.proxyUrl);
+    const gas=/script\.google(usercontent)?\.com/.test(OC.proxyUrl);
     // Apps Script: plain-text body (no custom headers) avoids the CORS preflight Apps Script can't answer
-    const r=await fetch(OCR_CONFIG.proxyUrl, gas ? {method:"POST",body:payload}
+    const r=await fetch(OC.proxyUrl, gas ? {method:"POST",body:payload}
       : {method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+idToken},body:payload});
     if(!r.ok) throw new Error("OCR proxy error "+r.status);
     const j=await r.json(); if(j && j.error) throw new Error("OCR: "+j.error); return j;
   }
-  if(OCR_CONFIG.provider==="openai" && OCR_CONFIG.openaiKey){
+  if(OC.provider==="openai" && OC.openaiKey){
     const part=f.type==="application/pdf"?{type:"file",file:{filename:f.name,file_data:dataUrl}}:{type:"image_url",image_url:{url:dataUrl}};
-    const r=await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+OCR_CONFIG.openaiKey},
-      body:JSON.stringify({model:OCR_CONFIG.openaiModel,temperature:0,response_format:{type:"json_object"},messages:[{role:"system",content:ocrPrompt()},{role:"user",content:[{type:"text",text:"Extract the policy fields from this document."},part]}]})});
+    const r=await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+OC.openaiKey},
+      body:JSON.stringify({model:OC.openaiModel,temperature:0,response_format:{type:"json_object"},messages:[{role:"system",content:ocrPrompt()},{role:"user",content:[{type:"text",text:"Extract the policy fields from this document."},part]}]})});
     const j=await r.json(); if(!r.ok) throw new Error(j.error?.message||("OpenAI error "+r.status));
     return JSON.parse(j.choices[0].message.content);
   }
-  if(OCR_CONFIG.provider==="google" && OCR_CONFIG.googleVisionKey){
+  if(OC.provider==="google" && OC.googleVisionKey){
     if(f.type==="application/pdf") throw new Error("Google Vision images:annotate needs an image. Upload a photo/screenshot, or use OpenAI/proxy for PDFs.");
-    const r=await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${OCR_CONFIG.googleVisionKey}`,{method:"POST",headers:{"Content-Type":"application/json"},
+    const r=await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${OC.googleVisionKey}`,{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({requests:[{image:{content:dataUrl.split(",")[1]},features:[{type:"DOCUMENT_TEXT_DETECTION"}]}]})});
     const j=await r.json(); if(!r.ok) throw new Error(j.error?.message||"Vision error");
     return parseOCRText(j.responses?.[0]?.fullTextAnnotation?.text||"");
   }
-  throw new Error("OCR is not configured. Add a proxyUrl or API key in OCR_CONFIG (top of the script).");
+  throw new Error("OCR is not set up yet. Master: open Settings › OCR / AI and paste the OpenAI key (or proxy URL).");
 }
 /* Heuristic parser for raw OCR text (Indian policy formats) */
 function parseOCRText(t){
@@ -2345,7 +2395,7 @@ const STAB={t:"branding",planComp:""};
 async function saveSettings(patch){ try{ await setDoc(doc(db,"settings","main"),patch,{merge:true}); logAct("settings.update",Object.keys(patch).join(",")); }catch(e){ toast("Settings save failed: "+e.code,"er"); throw e; } }
 function renderSettings(){
   const el=$("#pg-settings"); if(!can("canManageSettings")) return; const s=S.settings, b=s.branding;
-  const tabs=[["branding","Branding"],["companies","Companies"],["plans","Plans"],["rms","RMs"],["lists","Dropdowns"],["log","Activity Log"],["data","Data"]];
+  const tabs=[["branding","Branding"],["companies","Companies"],["plans","Plans & Commission"],["rms","RMs"],["fields","Form Fields"],["lists","Dropdowns"],...(isMaster()?[["ocr","OCR / AI"]]:[]),["log","Activity Log"],["data","Data"]];
   let body="";
   if(STAB.t==="branding") body=`<div class="g2"><div class="card"><div class="ch"><h3>Company details</h3><span class="mu" style="font-size:12px">Auto-saves on change</span></div><div class="fg" style="grid-template-columns:1fr 1fr">
       <label class="f">Company name<input class="in" data-b="name" value="${esc(b.name)}"></label><label class="f">Tagline<input class="in" data-b="tagline" value="${esc(b.tagline)}"></label>
@@ -2361,9 +2411,9 @@ function renderSettings(){
     <p class="mu" style="font-size:12px;margin-top:12px">Renaming a company does not change existing policy records.</p></div>`;
   if(STAB.t==="plans"){ const list=s.plans.filter(p=>!STAB.planComp||p.company===STAB.planComp);
     body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">Company<select class="in" id="plCo">${s.companies.map(c=>`<option ${c.name===STAB.planComp?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label>
-      <label class="f">Category<select class="in" id="plCat">${s.categories.map(c=>`<option>${esc(c)}</option>`).join("")}</select></label><label class="f">Plan / policy name<input class="in" id="plName"></label><button class="btn o" id="plAdd">${I("plus")}Add</button></div>
+      <label class="f">Category<select class="in" id="plCat">${s.categories.map(c=>`<option>${esc(c)}</option>`).join("")}</select></label><label class="f">Plan / policy name<input class="in" id="plName"></label><label class="f" style="max-width:150px">Commission %<input class="in" id="plPct" type="number" step="any"></label><label class="f" style="max-width:150px">Renewal %<input class="in" id="plRen" type="number" step="any" title="Life renewal-premium commission %"></label><button class="btn o" id="plAdd">${I("plus")}Add</button></div>
       <div class="row" style="margin-bottom:10px;justify-content:flex-start"><label class="f" style="max-width:280px">Filter by company<select class="in" id="plFilter"><option value="">All</option>${s.companies.map(c=>`<option ${c.name===STAB.planComp?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label></div>
-      <div class="tw"><table class="tbl"><thead><tr><th>Plan</th><th>Company</th><th>Category</th><th></th></tr></thead><tbody>${list.map(p=>`<tr data-id="${p.id}"><td><b>${esc(p.name)}</b></td><td>${esc(p.company)}</td><td>${catBadge(p.category)}</td><td class="r"><button class="btn g ic d" data-a="del">${I("trash")}</button></td></tr>`).join("")||emptyRow(4,"No plans")}</tbody></table></div></div>`; }
+      <div class="tw"><table class="tbl"><thead><tr><th>Plan</th><th>Company</th><th>Category</th><th>Commission %</th><th>Renewal %</th><th></th></tr></thead><tbody>${list.map(p=>`<tr data-id="${p.id}"><td><b>${esc(p.name)}</b></td><td>${esc(p.company)}</td><td>${catBadge(p.category)}</td><td><input class="in" style="max-width:110px" type="number" step="any" data-pf="commPct" value="${esc(p.commPct??"")}"></td><td><input class="in" style="max-width:110px" type="number" step="any" data-pf="renewalPct" value="${esc(p.renewalPct??"")}"></td><td class="r"><button class="btn g ic d" data-a="del">${I("trash")}</button></td></tr>`).join("")||emptyRow(6,"No plans")}</tbody></table></div><p class="mu" style="font-size:12px;margin-top:10px"><b>Commission %</b> is the base rate on premium excl. GST — it fills automatically when this plan is picked on a policy. <b>Renewal %</b> is used for Life renewal instalments. Rewards / incentives are entered manually on each policy.</p></div>`; }
   if(STAB.t==="rms") body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">RM name<input class="in" id="rmN"></label><label class="f">RM code<input class="in" id="rmC"></label>
       <label class="f">Branch<select class="in" id="rmB">${s.branches.map(x=>`<option>${esc(x)}</option>`).join("")}</select></label><label class="f">Default commission %<input class="in" id="rmP" type="number" step="any"></label><button class="btn o" id="rmAdd">${I("plus")}Add</button></div>
     <div class="tw"><table class="tbl"><thead><tr><th>Name</th><th>Code</th><th>Branch</th><th>Comm. %</th><th></th></tr></thead><tbody>${s.rms.map(r=>`<tr data-id="${r.id}"><td><input class="in" data-rf="name" value="${esc(r.name)}"></td><td><input class="in" data-rf="code" value="${esc(r.code)}"></td>
@@ -2373,8 +2423,26 @@ function renderSettings(){
       <div class="row"><input class="in" placeholder="Add option…" data-addl><button class="btn sm p" data-addb>${I("plus")}</button></div>
       ${k==="categories"?'<p class="mu" style="font-size:12px;margin-top:8px">“Motor” shows vehicle fields.</p>':k==="statuses"?'<p class="mu" style="font-size:12px;margin-top:8px">Only “Active” policies get renewal alerts.</p>':k==="frequencies"?'<p class="mu" style="font-size:12px;margin-top:8px">Yearly, Half-Yearly, Quarterly, Monthly, Single drive auto renewal dates; others default to 12 months.</p>':""}</div>`).join("")}</div>`;
   if(STAB.t==="log") body=`<div class="card p0"><div class="tw"><table class="tbl"><thead><tr><th>When</th><th>User</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody id="logBody">${emptyRow(5,"Loading…")}</tbody></table></div></div>`;
+  if(STAB.t==="fields") body=`<div class="card p0"><div class="tbar" style="display:block"><h3>Form fields</h3><p class="mu" style="font-size:12.5px;margin-top:4px;line-height:1.55">Choose which fields appear in the Add / Edit policy form and which are mandatory. <b>Hidden fields are still kept</b> in the database, Excel export and import — switch them back on any time. Policy No. <i>or</i> Application No. is always needed at Stage 1.</p></div>
+    <div class="tw"><table class="tbl"><thead><tr><th>Step</th><th>Field</th><th class="c">Show in form</th><th class="c">Required at Stage 1</th><th class="c">Required for In-force</th></tr></thead><tbody>
+    ${F.filter(f=>!f.ro&&!f.formRo).map(f=>{ const r=fr(f), lk=LOCKED_F[f.k], step=(SECTIONS.find(x=>x[0]===f.s)||["",""])[1];
+      return `<tr data-k="${f.k}"><td class="mu">${esc(step)}</td><td><b>${esc(f.l)}</b>${f.only?` <span class="bd gy">${esc(f.only)} only</span>`:""}${lk?`<br><small class="mu">Always required</small>`:""}</td>
+      <td class="c"><label class="sw"><input type="checkbox" data-r="show" ${!r.hide?"checked":""} ${lk?"disabled":""}><span></span></label></td>
+      <td class="c"><label class="sw"><input type="checkbox" data-r="req" ${r.req&&!r.hide?"checked":""} ${lk||r.hide?"disabled":""}><span></span></label></td>
+      <td class="c"><label class="sw"><input type="checkbox" data-r="inf" ${(r.inf||r.req)&&!r.hide?"checked":""} ${lk||r.hide||r.req?"disabled":""}><span></span></label></td></tr>`; }).join("")}
+    </tbody></table></div><div class="pager"><span>Changes save instantly and apply to every user.</span><button class="btn sm" id="frReset">Reset to defaults</button></div></div>`;
+  if(STAB.t==="ocr") body=`<div class="card" style="max-width:760px"><div class="ch"><h3>OCR / AI auto-fill</h3></div>
+    <p class="mu" style="font-size:13px;line-height:1.6;margin-bottom:14px">Saved in Firestore (<code>private/ocr</code>). Only logged-in staff who can add or edit policies can read it, and it is <b>never inside the website file</b>. For the strongest protection, use the Apps Script proxy URL instead of a direct key.</p>
+    <div class="fg" style="grid-template-columns:1fr 1fr">
+      <label class="f w2">Proxy URL (Apps Script / Cloud Function) — optional<input class="in" id="ocProxy" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label class="f w2">OpenAI API key<input class="in" id="ocKey" type="password" placeholder="sk-…" autocomplete="off"></label>
+      <label class="f">Model<select class="in" id="ocModel"><option value="gpt-4o">gpt-4o (best for scans)</option><option value="gpt-4o-mini">gpt-4o-mini (cheaper)</option></select></label>
+      <label class="f">Status<input class="in" id="ocState" readonly value="Loading…"></label>
+    </div>
+    <div class="row" style="justify-content:flex-start;margin-top:14px"><button class="btn p" id="ocSave" style="flex:none">${I("check")}Save</button><button class="btn" id="ocShow" style="flex:none">Show / hide key</button><button class="btn d" id="ocClear" style="flex:none">Remove key</button></div>
+    <p class="mu" style="font-size:12px;margin-top:10px">If a proxy URL is set it is used first; otherwise the key is used.</p></div>`;
   if(STAB.t==="data") body=`<div class="card"><div class="ch"><h3>Local cache &amp; sync</h3></div><p class="mu" style="line-height:1.6;margin-bottom:14px">Records are cached in this browser and only changes are downloaded, keeping Firestore reads low. Cached now: <b>${Object.keys(S.policies).length.toLocaleString("en-IN")}</b> policies, <b>${Object.keys(S.income).length.toLocaleString("en-IN")}</b> income records.</p>
-    <div class="row" style="justify-content:flex-start"><button class="btn" id="dResync">${I("refresh")}Resync everything from server</button><button class="btn" id="dDraft">Clear local drafts</button></div></div>`;
+    <div class="row" style="justify-content:flex-start"><button class="btn" id="dResync">${I("refresh")}Reload all data (only if numbers look wrong)</button><button class="btn" id="dDraft">Clear local drafts</button></div></div>`;
   el.innerHTML=`<div class="ph"><div><h2>Settings</h2><p>Companies, plans, RMs, dropdowns and branding — saved to Firestore and applied everywhere.</p></div></div>
     <div class="tabs">${tabs.map(([k,l])=>`<button class="tab ${STAB.t===k?"on":""}" data-t="${k}">${l}</button>`).join("")}</div>${body}`;
   el.querySelector(".tabs").onclick=e=>{ const t=e.target.closest("[data-t]")?.dataset.t; if(t){ STAB.t=t; renderSettings(); } };
@@ -2395,10 +2463,12 @@ function renderSettings(){
     el.querySelector(".co-grid").onchange=e=>{ if(e.target.dataset.coname===undefined) return; const id=e.target.closest(".co").dataset.id; const n=e.target.value.trim(); if(n) saveSettings({companies:s.companies.map(c=>c.id===id?{...c,name:n}:c)}); };
   }
   if(STAB.t==="plans"){
-    const add=()=>{ const n=$("#plName").value.trim(), co=$("#plCo").value, cat=$("#plCat").value; if(!n||!co) return toast("Add a company first and enter a plan name.","er"); STAB.planComp=co; saveSettings({plans:[...s.plans,{id:rid(),company:co,category:cat,name:n}]}); };
+    const add=()=>{ const n=$("#plName").value.trim(), co=$("#plCo").value, cat=$("#plCat").value; if(!n||!co) return toast("Add a company first and enter a plan name.","er"); STAB.planComp=co; const pv=id=>$("#"+id).value===""?"":num($("#"+id).value); saveSettings({plans:[...s.plans,{id:rid(),company:co,category:cat,name:n,commPct:pv("plPct"),renewalPct:pv("plRen")}]}); };
     $("#plAdd").onclick=add; $("#plName").onkeydown=e=>{ if(e.key==="Enter") add(); };
     $("#plFilter").onchange=e=>{ STAB.planComp=e.target.value; renderSettings(); };
     el.querySelector("tbody").onclick=e=>{ if(e.target.closest("[data-a=del]")){ const id=e.target.closest("tr").dataset.id; saveSettings({plans:s.plans.filter(p=>p.id!==id)}); } };
+    el.querySelector("tbody").onchange=e=>{ const f=e.target.dataset.pf; if(!f) return; const id=e.target.closest("tr").dataset.id; const v=e.target.value===""?"":num(e.target.value);
+      saveSettings({plans:s.plans.map(p=>p.id===id?{...p,[f]:v}:p)}).then(()=>toast("Plan commission saved.","ok")); };
   }
   if(STAB.t==="rms"){
     $("#rmAdd").onclick=()=>{ const n=$("#rmN").value.trim(); if(!n) return toast("RM name required.","er"); saveSettings({rms:[...s.rms,{id:rid(),name:n,code:$("#rmC").value.trim(),branch:$("#rmB").value,commPct:$("#rmP").value===""?"":num($("#rmP").value)}]}); };
@@ -2415,6 +2485,26 @@ function renderSettings(){
   if(STAB.t==="log") getDocs(query(collection(db,"activityLog"),orderBy("at","desc"),limit(300))).then(snap=>{
     $("#logBody").innerHTML=snap.docs.map(d=>{ const x=d.data(); return `<tr><td>${fmtTs(x.at?.toMillis?.())}</td><td>${esc(x.name)}</td><td><span class="bd bl">${esc(x.action)}</span></td><td>${esc(x.target)}</td><td class="mu">${esc(x.details)}</td></tr>`; }).join("")||emptyRow(5,"No activity yet.");
   }).catch(e=>$("#logBody").innerHTML=emptyRow(5,"Could not load: "+e.code));
+  if(STAB.t==="fields"){
+    el.querySelector("tbody").onchange=e=>{ const c=e.target.closest("[data-r]"); if(!c) return; const k=c.closest("tr").dataset.k; const r={...fr(FK[k])};
+      if(c.dataset.r==="show"){ r.hide=!c.checked; if(r.hide){ r.req=false; r.inf=false; } }
+      if(c.dataset.r==="req") r.req=c.checked;
+      if(c.dataset.r==="inf") r.inf=c.checked;
+      saveSettings({fieldRules:{...(s.fieldRules||{}),[k]:{hide:!!r.hide,req:!!r.req,inf:!!r.inf}}}).then(()=>toast(`${FK[k].l}: saved.`,"ok")); };
+    $("#frReset").onclick=async()=>{ if(await confirmBox("Reset all form-field settings to the defaults?","Reset")){ try{ await updateDoc(doc(db,"settings","main"),{fieldRules:{}}); toast("Form fields reset.","ok"); }catch(e){ toast("Reset failed: "+e.code,"er"); } } };
+  }
+  if(STAB.t==="ocr"){
+    const stTxt=x=>x.proxyUrl?"Using proxy URL":x.openaiKey?"Using OpenAI key":"Not configured";
+    getDoc(doc(db,"private","ocr")).then(sn=>{ const x=sn.exists()?sn.data():{}; $("#ocProxy").value=x.proxyUrl||""; $("#ocKey").value=x.openaiKey||""; if(x.model) $("#ocModel").value=x.model; $("#ocState").value=stTxt(x); })
+      .catch(e=>{ $("#ocState").value=`Can't read (${e.code}) — publish the latest Firestore rules`; });
+    $("#ocShow").onclick=()=>{ const k=$("#ocKey"); k.type=k.type==="password"?"text":"password"; };
+    const save=async()=>{ const x={proxyUrl:$("#ocProxy").value.trim(),openaiKey:$("#ocKey").value.trim(),model:$("#ocModel").value,updatedAt:serverTimestamp(),updatedBy:S.user.uid};
+      if(x.openaiKey&&!/^sk-/.test(x.openaiKey)) return toast("That doesn't look like an OpenAI key (it should start with sk-).","er");
+      try{ await setDoc(doc(db,"private","ocr"),x); S.ocrCfg=null; logAct("settings.ocr",x.proxyUrl?"proxy":x.openaiKey?"key":"cleared"); toast("OCR settings saved.","ok"); $("#ocState").value=stTxt(x); }
+      catch(e){ toast("Save failed: "+e.code+" — publish the latest Firestore rules.","er"); } };
+    $("#ocSave").onclick=save;
+    $("#ocClear").onclick=async()=>{ if(await confirmBox("Remove the saved OpenAI key?","Remove",true)){ $("#ocKey").value=""; save(); } };
+  }
   if(STAB.t==="data"){
     $("#dResync").onclick=async()=>{ if(await confirmBox("Clear the local cache and download all records again? (Uses Firestore reads.)","Resync")){ await IDB.clear(); location.reload(); } };
     $("#dDraft").onclick=()=>{ Object.keys(localStorage).filter(k=>k.startsWith("ib_draft:")).forEach(k=>localStorage.removeItem(k)); toast("Drafts cleared.","ok"); };
