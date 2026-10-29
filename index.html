@@ -1,0 +1,2202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Insurance Back Office</title>
+<!--
+=====================================================================================
+ SETUP GUIDE  (Insurance Back Office · single file · Firebase Auth + Firestore)
+=====================================================================================
+ 1. CREATE PROJECT
+    console.firebase.google.com > Add project > (Analytics optional)
+    Project settings > General > "Your apps" > Add Web app (</>) > copy the config object.
+    Paste it into firebaseConfig in the script below (search: PASTE YOUR FIREBASE CONFIG HERE).
+
+ 2. ENABLE AUTH
+    Build > Authentication > Get started > Sign-in method > Email/Password > Enable.
+    Authentication > Users > Add user  (this is your MASTER ADMIN email + password).
+    Put the same email in MASTER_EMAIL below.
+
+ 3. ENABLE FIRESTORE
+    Build > Firestore Database > Create database > Production mode > region asia-south1 (Mumbai).
+    Rules tab > paste the FIRESTORE RULES from the script below.
+    Replace insurance@wallet4wealth.in in the rules with your MASTER_EMAIL > Publish.
+
+ 4. FILE UPLOADS (policy PDFs, ID proofs, receipts)
+    Option A (recommended, needs Blaze plan): Build > Storage > Get started > paste STORAGE RULES.
+    Option B (free Spark plan): set STORAGE_MODE = "firestore". Files up to 700 KB are stored
+    inside Firestore (images are auto compressed). "auto" tries Storage first, then falls back.
+
+ 5. FIRST LOGIN
+    Open this file (hosted, see step 7) and sign in with the master email.
+    The master profile and default settings are created automatically on first login.
+    Then go to Settings to add companies, plans, RMs and branding; Users to add sub users.
+
+ 6. INDEXES (only needed for users WITHOUT "View all policies")
+    The first time such a user logs in, the browser console shows a link
+    "The query requires an index ... create it here". Click it, or create manually:
+      policies : createdBy Ascending, updatedAt Ascending
+      income   : createdBy Ascending, updatedAt Ascending
+      claims   : createdBy Ascending, updatedAt Ascending
+
+ 7. HOSTING
+    Firebase Hosting, GitHub Pages or any static host. Add the domain under
+    Authentication > Settings > Authorized domains. (Opening via file:// will not work for Auth.)
+
+ 8. OCR / AI AUTO FILL
+    Search OCR_CONFIG below.
+    Best:  proxyUrl  = your Cloud Function URL (keeps API keys secret; sample function included).
+    Quick: provider "openai" + openaiKey  (GPT-4o vision, reads images AND PDFs, returns JSON).
+           provider "google" + googleVisionKey (Cloud Vision text + built-in field parser, images only).
+    Never ship a real API key in a public site; use the proxy for production.
+
+ 9. FREE TIER NOTES
+    Data is cached in the browser (IndexedDB) and only CHANGED records are downloaded after
+    the first load, so 8k+ policies stay cheap on reads. A bulk import of N rows uses about
+    2N writes (policy + income). Spark plan allows 20k writes per day.
+=====================================================================================
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--o:#F97316;--o2:#EA580C;--ol:#FFF3EA;--b:#1E40AF;--b2:#2563EB;--bl:#EBF2FF;--k:#111111;--k2:#1B1B1F;--w:#FFFFFF;--bg:#F4F6FA;--bd:#E5E8EF;--mu:#6B7280;--tx:#111827;--ok:#15803D;--okl:#E7F7EC;--er:#DC2626;--erl:#FDECEC;--wa:#B45309;--wal:#FEF4E6;--r:14px;--sh:0 1px 2px rgba(16,24,40,.04),0 6px 20px rgba(16,24,40,.06)}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--tx);font-size:14px;-webkit-font-smoothing:antialiased}
+.hidden{display:none!important}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:var(--b2);text-decoration:none;cursor:pointer}
+svg.i{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+h2{font-size:22px;font-weight:800;letter-spacing:-.02em}
+h3{font-size:15px;font-weight:700}
+h4{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--b)}
+.mu{color:var(--mu)}
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:38px;padding:0 14px;border-radius:10px;border:1px solid var(--bd);background:var(--w);cursor:pointer;font-weight:600;font-size:13.5px;transition:.15s;white-space:nowrap}
+.btn:hover{border-color:#cbd1dc;background:#fafbfc}
+.btn.p{background:var(--b2);border-color:var(--b2);color:#fff}.btn.p:hover{background:var(--b)}
+.btn.o{background:var(--o);border-color:var(--o);color:#fff}.btn.o:hover{background:var(--o2)}
+.btn.k{background:var(--k);border-color:var(--k);color:#fff}.btn.k:hover{background:#000}
+.btn.d{color:var(--er)}.btn.d:hover{background:var(--erl);border-color:#f3c0c0}
+.btn.g{border-color:transparent;background:transparent}.btn.g:hover{background:#eef0f5}
+.btn.sm{height:30px;padding:0 10px;font-size:12.5px;border-radius:8px}
+.btn.ic{width:32px;height:32px;padding:0}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+/* inputs */
+.in{width:100%;height:38px;border:1px solid var(--bd);border-radius:10px;padding:0 12px;background:#fff;outline:none;transition:.15s;font-size:13.5px}
+textarea.in{height:auto;min-height:72px;padding:10px 12px;resize:vertical}
+.in:focus{border-color:var(--b2);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.in[readonly],.in:disabled{background:#F7F8FA;color:#374151}
+.in.filled{border-color:var(--o);box-shadow:0 0 0 3px rgba(249,115,22,.18)}
+.in.bad{border-color:var(--er)}
+label.f{display:flex;flex-direction:column;gap:6px;font-size:12.5px;font-weight:600;color:#374151}
+label.f .req{color:var(--o)}
+.w2{grid-column:span 2}
+/* login */
+.login{display:grid;grid-template-columns:1.1fr 1fr;min-height:100vh}
+.lg-l{background:var(--k);color:#fff;padding:56px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.lg-l:before{content:"";position:absolute;width:560px;height:560px;border-radius:50%;background:radial-gradient(circle,rgba(249,115,22,.38),transparent 65%);right:-180px;top:-180px}
+.lg-l:after{content:"";position:absolute;width:520px;height:520px;border-radius:50%;background:radial-gradient(circle,rgba(37,99,235,.35),transparent 65%);left:-200px;bottom:-220px}
+.lg-l>*{position:relative;z-index:1}
+.lg-brand{display:flex;align-items:center;gap:12px;font-weight:800;font-size:18px}
+.lg-logo{background:#fff;border-radius:16px;padding:14px 24px;height:100px;display:inline-flex;align-items:center;justify-content:center;max-width:380px}
+.lg-logo img{max-width:100%;max-height:100%;object-fit:contain}
+.lg-logo-r{display:none;text-align:center}
+.lg-logo-r img{max-height:72px;max-width:280px;object-fit:contain}
+.mark{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--o),var(--b2));display:grid;place-items:center;color:#fff;font-weight:800}
+.lg-l h1{font-size:44px;line-height:1.08;letter-spacing:-.03em;font-weight:800;max-width:520px}
+.lg-l h1 span{color:var(--o)}
+.lg-feat{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:520px;margin-top:28px}
+.lg-feat div{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:14px;font-size:13px;color:#d6d8de;display:flex;gap:10px;align-items:center}
+.lg-feat svg{color:var(--o)}
+.lg-r{display:grid;place-items:center;padding:40px;background:#fff}
+.lg-form{width:100%;max-width:380px;display:flex;flex-direction:column;gap:16px}
+.lg-form h2{font-size:28px}
+.lg-err{background:var(--erl);color:var(--er);padding:10px 12px;border-radius:10px;font-size:13px}
+.lg-warn{background:var(--wal);color:var(--wa);padding:12px;border-radius:10px;font-size:13px;line-height:1.5}
+.lg-form .btn{height:44px}
+/* layout */
+.app{display:flex;min-height:100vh}
+.sb{width:256px;background:var(--k);color:#c9ccd4;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:40;transition:transform .25s,width .25s;overflow:hidden}
+/* sidebar brand — wide logo shown full width on a white plate */
+.sb-brand{display:flex;flex-direction:column;align-items:stretch;justify-content:center;gap:8px;padding:16px 14px;border-bottom:1px solid rgba(255,255,255,.07);min-height:76px}
+.sb-brand.txt{flex-direction:row;align-items:center;gap:12px}
+.sb-logo{background:#fff;border-radius:12px;padding:8px 12px;height:68px;display:flex;align-items:center;justify-content:center}
+.sb-logo img{max-width:100%;max-height:100%;object-fit:contain}
+.sb-tag{font-size:11.5px;color:#8b8f99;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-ic{display:none;flex:none}
+.sb-brand.txt .sb-ic{display:block}
+.sb-ic img,.sb-ic .mark{width:42px;height:42px;border-radius:10px;object-fit:contain;background:#fff;display:grid;place-items:center}
+.sb-ic .mark{background:linear-gradient(135deg,var(--o),var(--b2))}
+.sb-txt{min-width:0}
+.sb-txt b{color:#fff;font-size:15px;display:block;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-txt small{font-size:11.5px;color:#8b8f99}
+.sb nav{padding:14px 10px;display:flex;flex-direction:column;gap:2px;flex:1;overflow:auto}
+.nv{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;color:#c9ccd4;font-weight:500;cursor:pointer;transition:.15s;position:relative}
+.nv:hover{background:rgba(255,255,255,.06);color:#fff}
+.nv.on{background:var(--o);color:#fff;box-shadow:0 6px 18px rgba(249,115,22,.35)}
+.nv .cnt{margin-left:auto;background:var(--b2);color:#fff;font-size:11px;font-weight:700;border-radius:20px;padding:2px 7px}
+.nv.on .cnt{background:#fff;color:var(--o)}
+.sb-sep{height:1px;background:rgba(255,255,255,.07);margin:10px 6px}
+.sb-foot{padding:14px 18px;font-size:11.5px;color:#7d818b;border-top:1px solid rgba(255,255,255,.07);line-height:1.6}
+.main{flex:1;margin-left:256px;min-width:0;display:flex;flex-direction:column;transition:margin-left .25s}
+.tb{height:64px;background:#fff;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:14px;padding:0 24px;position:sticky;top:0;z-index:30}
+.tb h1{font-size:17px;font-weight:700}
+.tb .sp{flex:1}
+.sync{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mu);background:#f4f6fa;padding:6px 10px;border-radius:20px}
+.sync i{width:8px;height:8px;border-radius:50%;background:#aaa}
+.sync.ok i{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.18)}
+.sync.er i{background:var(--er)}
+.bell{position:relative}
+.bell .dot{position:absolute;top:2px;right:2px;min-width:17px;height:17px;border-radius:9px;background:var(--o);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px;border:2px solid #fff}
+.av{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--b2),var(--b));color:#fff;display:grid;place-items:center;font-weight:700;cursor:pointer;font-size:13px}
+.dd{position:absolute;top:56px;right:16px;background:#fff;border:1px solid var(--bd);border-radius:14px;box-shadow:0 18px 48px rgba(16,24,40,.16);width:340px;z-index:60;overflow:hidden;animation:pop .15s ease}
+.dd-h{padding:14px 16px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center}
+.dd-b{max-height:380px;overflow:auto}
+.dd-i{padding:11px 16px;border-bottom:1px solid #f1f2f6;cursor:pointer;display:flex;gap:10px;align-items:center}
+.dd-i:hover{background:#fafbfc}
+.dd-i small{display:block;color:var(--mu);font-size:12px}
+.dd-u{width:240px}
+.dd-u .dd-i{font-weight:500}
+.burger{display:inline-flex}
+.ct{padding:24px;max-width:1500px;width:100%;margin:0 auto}
+.page{animation:fade .2s ease}
+.ph{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.ph p{color:var(--mu);margin-top:4px}
+.ph-a{display:flex;gap:10px;flex-wrap:wrap}
+.card{background:#fff;border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);padding:18px}
+.card.p0{padding:0;overflow:hidden}
+.ch{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px}
+.g2{display:grid;grid-template-columns:1.4fr 1fr;gap:18px;margin-bottom:18px}
+.g2e{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:18px}
+.stat{background:#fff;border:1px solid var(--bd);border-radius:var(--r);padding:18px;display:flex;gap:14px;align-items:flex-start;box-shadow:var(--sh);position:relative;overflow:hidden}
+.stat:after{content:"";position:absolute;right:-30px;top:-30px;width:100px;height:100px;border-radius:50%;opacity:.07;background:currentColor}
+.stat .si{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex:none}
+.stat span{font-size:12.5px;color:var(--mu);font-weight:500}
+.stat>div{min-width:0}
+.stat b{display:block;font-size:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:800;letter-spacing:-.02em;margin-top:2px;color:var(--tx)}
+.stat small{font-size:12px;color:var(--mu)}
+.stat.o{color:var(--o)}.stat.o .si{background:var(--ol);color:var(--o)}
+.stat.b{color:var(--b2)}.stat.b .si{background:var(--bl);color:var(--b2)}
+.stat.k{color:var(--k)}.stat.k .si{background:#ececef;color:var(--k)}
+.stat.gr{color:var(--ok)}.stat.gr .si{background:var(--okl);color:var(--ok)}
+.cv{position:relative;height:260px}
+/* toolbar + table */
+.tbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:14px;border-bottom:1px solid var(--bd)}
+.tbar .srch{position:relative;flex:1;min-width:220px}
+.tbar .srch svg{position:absolute;left:11px;top:10px;color:var(--mu)}
+.tbar .srch .in{padding-left:36px}
+.tbar select.in,.tbar input[type=date].in{width:auto;min-width:130px}
+.tw{overflow:auto}
+table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{text-align:left;font-weight:600;color:var(--mu);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:11px 14px;background:#FAFBFC;border-bottom:1px solid var(--bd);white-space:nowrap;position:sticky;top:0;z-index:1}
+.tbl th.s{cursor:pointer;user-select:none}.tbl th.s:hover{color:var(--tx)}
+.tbl th.s.on{color:var(--b2)}
+.tbl td{padding:11px 14px;border-bottom:1px solid #F0F1F5;white-space:nowrap;vertical-align:middle}
+.tbl tbody tr{transition:background .1s}
+.tbl tbody tr:hover{background:#FAFBFF}
+.tbl tr.ck{cursor:pointer}
+.tbl td.r,.tbl th.r{text-align:right}
+.tbl td.c,.tbl th.c{text-align:center}
+.tbl .nm b{display:block;font-weight:600}.tbl .nm small{color:var(--mu)}
+.acts{display:flex;gap:4px;justify-content:flex-end}
+.empty{padding:48px 20px;text-align:center;color:var(--mu)}
+.empty svg{width:40px;height:40px;color:#c4c8d2;margin-bottom:8px}
+.pager{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;font-size:13px;color:var(--mu);gap:10px;flex-wrap:wrap}
+.pager div{display:flex;gap:8px;align-items:center}
+/* badges */
+.bd{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.bd.gr{background:var(--okl);color:var(--ok)}.bd.er{background:var(--erl);color:var(--er)}
+.bd.bl{background:var(--bl);color:var(--b)}.bd.or{background:var(--ol);color:var(--o2)}
+.bd.kk{background:#111;color:#fff}.bd.gy{background:#eef0f4;color:#4b5563}.bd.wa{background:var(--wal);color:var(--wa)}
+/* chips & tabs */
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;background:#F1F3F7;border:1px solid var(--bd);padding:5px 10px;border-radius:20px;font-size:12.5px;font-weight:500}
+.chip button{border:0;background:none;cursor:pointer;color:var(--mu);font-size:15px;line-height:1}
+.chip button:hover{color:var(--er)}
+.chip em{font-style:normal;color:var(--o);font-size:11px;font-weight:600}
+.tabs{display:flex;gap:4px;background:#ECEEF3;padding:4px;border-radius:12px;width:max-content;max-width:100%;overflow:auto;margin-bottom:18px}
+.tab{padding:8px 14px;border-radius:9px;cursor:pointer;font-weight:600;font-size:13px;color:#4b5563;white-space:nowrap;border:0;background:none}
+.tab.on{background:#fff;color:var(--k);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.tab .cnt{background:var(--o);color:#fff;border-radius:10px;padding:1px 6px;font-size:11px;margin-left:5px}
+/* switch */
+.sw{position:relative;display:inline-block;width:36px;height:20px}
+.sw input{opacity:0;width:0;height:0}
+.sw span{position:absolute;inset:0;background:#d4d8e0;border-radius:20px;transition:.2s;cursor:pointer}
+.sw span:before{content:"";position:absolute;width:16px;height:16px;left:2px;top:2px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.sw input:checked+span{background:var(--b2)}
+.sw input:checked+span:before{transform:translateX(16px)}
+.sw input:disabled+span{opacity:.55;cursor:not-allowed}
+.perm th{font-size:10.5px;white-space:normal;min-width:74px;line-height:1.25}
+/* modal */
+.mb{position:fixed;inset:0;background:rgba(17,17,17,.55);backdrop-filter:blur(3px);z-index:80;display:flex;align-items:flex-start;justify-content:center;padding:32px 16px;overflow:auto;animation:fade .15s}
+.md{background:#fff;border-radius:18px;width:100%;max-width:520px;box-shadow:0 30px 80px rgba(0,0,0,.3);animation:pop .18s ease;display:flex;flex-direction:column;max-height:calc(100vh - 64px)}
+.md.wide{max-width:1040px}
+.md-h{padding:18px 22px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:12px}
+.md-h h3{font-size:17px;flex:1}
+.md-b{padding:20px 22px;overflow:auto;flex:1}
+.md-f{padding:14px 22px;border-top:1px solid var(--bd);display:flex;gap:10px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
+.md-f .sp{flex:1}
+.fg{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.sec{margin-bottom:22px;padding-bottom:4px}
+.sec h4{margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.sec h4:after{content:"";flex:1;height:1px;background:var(--bd)}
+.stabs{display:flex;gap:6px;position:sticky;top:-20px;background:#fff;padding:8px 0 12px;margin-top:-8px;z-index:2;overflow:auto}
+.stabs button{border:1px solid var(--bd);background:#fff;border-radius:20px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.stabs button:hover{border-color:var(--o);color:var(--o)}
+.dgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.dslot{border:1.5px dashed #d5d9e2;border-radius:12px;padding:12px;min-height:96px;display:flex;flex-direction:column;gap:8px}
+.dslot-h{display:flex;justify-content:space-between;align-items:center;font-size:12.5px}
+.dlist{display:flex;flex-direction:column;gap:6px}
+.dlist .chip{justify-content:space-between;border-radius:8px}
+.dlist .chip a{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--b)}
+.ocrbar{background:linear-gradient(90deg,var(--ol),var(--bl));border:1px solid #f9d9c1;border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:12px;margin-bottom:18px;font-size:13px}
+.ocrbar b{color:var(--k)}
+.ocrbar .sp{flex:1}
+/* toast */
+#toasts{position:fixed;right:20px;bottom:20px;z-index:100;display:flex;flex-direction:column;gap:10px}
+.toast{background:var(--k);color:#fff;padding:12px 16px;border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.25);font-size:13.5px;display:flex;gap:12px;align-items:center;min-width:260px;max-width:420px;animation:slide .2s ease;border-left:4px solid var(--b2)}
+.toast.ok{border-left-color:#22c55e}.toast.er{border-left-color:var(--er)}.toast.wa{border-left-color:var(--o)}
+.toast button{margin-left:auto;background:var(--o);border:0;color:#fff;border-radius:8px;padding:5px 10px;font-weight:600;cursor:pointer;font-size:12.5px}
+/* misc */
+.list-i{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #F0F1F5}
+.list-i:last-child{border-bottom:0}
+.list-i .di{width:44px;text-align:center;flex:none}
+.list-i .di b{display:block;font-size:17px;font-weight:800}
+.list-i .di small{font-size:10.5px;color:var(--mu);text-transform:uppercase}
+.list-i .tx{flex:1;min-width:0}
+.list-i .tx b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.list-i .tx small{color:var(--mu)}
+.drop{border:2px dashed #cfd5e1;border-radius:14px;padding:32px;text-align:center;cursor:pointer;transition:.15s;background:#fcfcfd}
+.drop:hover,.drop.ov{border-color:var(--o);background:var(--ol)}
+.drop svg{width:34px;height:34px;color:var(--o);margin-bottom:8px}
+.prog{height:8px;background:#eceef3;border-radius:8px;overflow:hidden}
+.prog i{display:block;height:100%;background:linear-gradient(90deg,var(--o),var(--b2));width:0;transition:width .2s}
+.map{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.map label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;background:#fafbfc;border:1px solid var(--bd);border-radius:10px;padding:10px}
+.map label.mp{border-color:#bcd0fb;background:var(--bl)}
+.co-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.co{border:1px solid var(--bd);border-radius:12px;padding:12px;display:flex;gap:10px;align-items:center}
+.co img,.co .ini{width:44px;height:44px;border-radius:10px;object-fit:contain;flex:none;background:#f4f6fa;display:grid;place-items:center;font-weight:800;color:var(--b)}
+.co .in{height:32px}
+.row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.row>*{flex:1;min-width:140px}
+.row>.btn{flex:none}
+.logo-prev{width:100%;max-width:400px;height:130px;padding:14px;border-radius:16px;border:1px solid var(--bd);display:grid;place-items:center;background:#fafbfc;overflow:hidden;margin-bottom:12px}
+.icon-prev{width:56px;height:56px;border-radius:12px;border:1px solid var(--bd);display:grid;place-items:center;background:#fafbfc;overflow:hidden;font-weight:800;color:var(--b)}
+.icon-prev img{max-width:100%;max-height:100%;object-fit:contain}
+.logo-prev img{max-width:100%;max-height:100%;object-fit:contain}
+.note{background:#F7F8FB;border:1px solid var(--bd);border-radius:10px;padding:10px 12px;font-size:12.5px;color:#4b5563;line-height:1.55}
+.spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:rot .7s linear infinite}
+.loader{position:fixed;inset:0;background:#fff;display:grid;place-items:center;z-index:200}
+.loader .spin{width:36px;height:36px;border-color:#f3d2bb;border-top-color:var(--o);border-width:3px}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:35}
+/* line-of-business tabs (top bar) */
+.lob{display:flex;gap:4px;background:#F1F3F7;padding:4px;border-radius:12px;overflow-x:auto;max-width:100%;scrollbar-width:none}
+.lob::-webkit-scrollbar{display:none}
+.lob button{border:0;background:none;padding:7px 12px;border-radius:9px;font-weight:600;font-size:13px;color:#4b5563;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:7px;transition:.15s}
+.lob button:hover{color:var(--k)}
+.lob button i{width:9px;height:9px;border-radius:50%;flex:none}
+.lob button small{background:#e3e6ec;color:#374151;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700}
+.lob button.on{background:#fff;color:var(--k);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.lob button.on small{background:var(--o);color:#fff}
+/* business-mix cards on the All dashboard */
+.mix{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:18px}
+.mixc{background:#fff;border:1px solid var(--bd);border-top:4px solid var(--c);border-radius:var(--r);padding:16px;cursor:pointer;box-shadow:var(--sh);transition:.15s}
+.mixc:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(16,24,40,.1)}
+.mixh{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.mixh b{font-size:16px}.mixh span{font-size:12px;color:var(--c);font-weight:600}
+.mixg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.mixg small{display:block;color:var(--mu);font-size:11.5px}.mixg b{font-size:15px}
+/* collapsible side menu (desktop) */
+@media(min-width:901px){
+  body.sbc .sb{width:76px}
+  body.sbc .main{margin-left:76px}
+  body.sbc .sb-logo,body.sbc .sb-tag,body.sbc .sb-txt,body.sbc .nv .lb,body.sbc .sb-foot{display:none}
+  body.sbc .sb-ic{display:block}
+  body.sbc .sb-brand{align-items:center;padding:16px 0}
+  body.sbc .sb nav{padding:14px 10px}
+  body.sbc .nv{justify-content:center;padding:12px 0}
+  body.sbc .nv .cnt{position:absolute;top:3px;right:4px;padding:1px 5px;font-size:10px}
+  body.sbc .sb-sep{margin:10px 0}
+}
+/* status chips on dashboard */
+.stchips{display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 18px}
+.stchip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--bd);background:#fff;border-radius:20px;padding:4px 12px 4px 5px;cursor:pointer;font-size:13px;transition:.15s}
+.stchip:hover{border-color:var(--o)}
+/* ---------- MOBILE (≤700px): tables become cards, compact stats, full-screen modals ---------- */
+@media(max-width:700px){
+  .tbl.rsp thead{display:none}
+  .tbl.rsp,.tbl.rsp tbody,.tbl.rsp tr,.tbl.rsp td{display:block;width:100%}
+  .tbl.rsp tbody{padding:4px 12px}
+  .tbl.rsp tr{border:1px solid var(--bd);border-radius:12px;margin:10px 0;padding:4px 12px;background:#fff;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .tbl.rsp tbody tr:hover{background:#fff}
+  .tbl.rsp td{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:8px 0;border-bottom:1px dashed #eceef3;white-space:normal;text-align:right;min-height:38px}
+  .tbl.rsp td:last-child{border-bottom:0}
+  .tbl.rsp td::before{content:attr(data-label);font-size:11px;font-weight:600;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;text-align:left;flex:none;max-width:45%}
+  .tbl.rsp td[data-label=""]::before{display:none}
+  .tbl.rsp td[colspan]{display:block;text-align:center}
+  .tbl.rsp td .acts{justify-content:flex-end;width:100%;flex-wrap:wrap}
+  .tbl.rsp td.nm small{display:block}
+  .tbl.rsp td .in{max-width:60%}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .stat{padding:12px;gap:8px;flex-direction:column}
+  .stat .si{width:34px;height:34px;border-radius:10px}
+  .stat b{font-size:17px}
+  .ph h2{font-size:19px}
+  .ph-a{width:100%}.ph-a>.btn{flex:1}
+  .tbar select.in,.tbar input[type=date].in{flex:1;min-width:120px}
+  .pager{justify-content:center}
+  .mixg b{font-size:13px}
+  .card{padding:14px}
+  #toasts{left:12px;right:12px;bottom:12px}.toast{min-width:0;max-width:none}
+}
+@media(max-width:560px){
+  .mb{padding:0;align-items:stretch}
+  .md,.md.wide{max-width:none;border-radius:0;min-height:100vh;max-height:100vh;min-height:100dvh;max-height:100dvh}
+  .md-b{padding:16px}
+  .md-f{padding:12px 16px}.md-f .btn{flex:1}.md-f .sp{display:none}
+  .stabs{top:-16px}
+}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes slide{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
+@keyframes rot{to{transform:rotate(360deg)}}
+@media(max-width:1100px){.fg{grid-template-columns:repeat(2,1fr)}.dgrid{grid-template-columns:repeat(2,1fr)}.g2,.g2e{grid-template-columns:1fr}}
+@media(max-width:900px){.sb{transform:translateX(-100%)}.sb.open{transform:none}.main{margin-left:0}.login{grid-template-columns:1fr}.lg-l{display:none}.sync{display:none}.lg-logo-r{display:block}.tb{flex-wrap:wrap;height:auto;min-height:64px;padding:10px 14px;row-gap:8px}.lob{order:9;width:100%}}
+@media(max-width:560px){.fg,.dgrid{grid-template-columns:1fr}.w2{grid-column:auto}.ct{padding:14px}.tb{padding:0 12px}.dd{width:calc(100vw - 24px);right:12px}}
+</style>
+</head>
+<body>
+
+<div class="loader" id="loader"><div class="spin"></div></div>
+
+<!-- ================= LOGIN ================= -->
+<div class="login hidden" id="loginView">
+  <div class="lg-l">
+    <div class="lg-brand" id="lgBrand"><div class="mark">IB</div><span>Insurance Back Office</span></div>
+    <div>
+      <h1>Every policy, payout and renewal — <span>in one place.</span></h1>
+      <div class="lg-feat">
+        <div><svg class="i" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Permission-first access</div>
+        <div><svg class="i" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>AI OCR auto-fill</div>
+        <div><svg class="i" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/></svg>Renewal alerts</div>
+        <div><svg class="i" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Bulk Excel import</div>
+      </div>
+    </div>
+    <small style="color:#8b8f99" id="lgContact"></small>
+  </div>
+  <div class="lg-r">
+    <form class="lg-form" id="loginForm" autocomplete="on">
+      <div class="lg-logo-r" id="lgLogoR"></div>
+      <div><h2>Sign in</h2><p class="mu" style="margin-top:6px">Use the credentials provided by your administrator.</p></div>
+      <div class="lg-warn hidden" id="cfgWarn"><b>Firebase not configured.</b><br>Open this file in an editor and paste your Firebase config at <code>PASTE YOUR FIREBASE CONFIG HERE</code>. See the SETUP GUIDE at the top.</div>
+      <div class="lg-err hidden" id="lgErr"></div>
+      <label class="f">Email<input class="in" type="email" id="lgEmail" required autocomplete="username"></label>
+      <label class="f">Password<input class="in" type="password" id="lgPass" required autocomplete="current-password"></label>
+      <button class="btn p" type="submit" id="lgBtn">Sign in</button>
+      <a id="lgForgot" style="font-size:13px;text-align:center">Forgot password?</a>
+    </form>
+  </div>
+</div>
+
+<!-- ================= APP ================= -->
+<div class="app hidden" id="appView">
+  <aside class="sb" id="sb">
+    <div class="sb-brand" id="sbBrand"></div>
+    <nav id="nav">
+      <a class="nv" data-page="dashboard" data-ic="home"><span class="lb">Dashboard</span></a>
+      <a class="nv" data-page="policies" data-ic="file"><span class="lb">Policies</span><span class="cnt" id="cntPol">0</span></a>
+      <a class="nv" data-page="income" data-ic="rupee" data-perm="canViewIncome|canViewPayout"><span class="lb">Income &amp; Payout</span></a>
+      <a class="nv" data-page="bulk" data-ic="upload" data-perm="canUploadBulk|canDownloadExcel"><span class="lb">Bulk Upload / Export</span></a>
+      <a class="nv" data-page="renewals" data-ic="bell"><span class="lb">Renewal Reminders</span><span class="cnt hidden" id="cntRen">0</span></a>
+      <a class="nv" data-page="claims" data-ic="claim"><span class="lb">Claims</span><span class="cnt hidden" id="cntClm">0</span></a>
+      <div class="sb-sep"></div>
+      <a class="nv" data-page="users" data-ic="users" data-perm="canManageUsers"><span class="lb">Users &amp; Permissions</span></a>
+      <a class="nv" data-page="settings" data-ic="sliders" data-perm="canManageSettings"><span class="lb">Settings</span></a>
+      <a class="nv" id="navLogout" data-ic="logout"><span class="lb">Logout</span></a>
+    </nav>
+    <div class="sb-foot" id="sbFoot"></div>
+  </aside>
+  <div class="main">
+    <header class="tb">
+      <button class="btn g ic burger" id="burger"></button>
+      <h1 id="pgTitle">Dashboard</h1>
+      <div class="lob hidden" id="lobTabs"></div>
+      <div class="sp"></div>
+      <div class="sync" id="sync"><i></i><span>Connecting…</span></div>
+      <button class="btn g ic bell" id="bellBtn" title="Renewal alerts"><span class="dot hidden" id="bellDot">0</span></button>
+      <div class="av" id="avBtn" title="Account">U</div>
+    </header>
+    <main class="ct">
+      <section class="page" id="pg-dashboard"></section>
+      <section class="page hidden" id="pg-policies"></section>
+      <section class="page hidden" id="pg-income"></section>
+      <section class="page hidden" id="pg-bulk"></section>
+      <section class="page hidden" id="pg-renewals"></section>
+      <section class="page hidden" id="pg-claims"></section>
+      <section class="page hidden" id="pg-users"></section>
+      <section class="page hidden" id="pg-settings"></section>
+    </main>
+  </div>
+</div>
+
+<input type="file" id="docInput" hidden multiple accept="image/*,application/pdf">
+<input type="file" id="ocrInput" hidden accept="image/*,application/pdf">
+<div id="modalRoot"></div>
+<div id="toasts"></div>
+
+<script type="module">
+/* =====================================================================================
+   FIRESTORE DATA STRUCTURE
+   users/{uid}        { email, name, role:'master'|'user', active:bool, permissions:{canAddPolicy,...}, createdAt }
+   settings/main      { branding:{name,tagline,logo(dataURL),phone,email,address}, companies:[{id,name,logo}],
+                        plans:[{id,company,category,name}], rms:[{id,name,code,branch,commPct}],
+                        categories:[], frequencies:[], statuses:[], paymentModes:[], branches:[],
+                        kycTypes:[], relations:[], genders:[] }
+   policies/{id}      { policyNo, company, category, plan, sumAssured, premium, frequency, startDate, endDate,
+                        renewalDate, status, custName, dob, age, gender, phone, email, address, nomineeName,
+                        nomineeRelation, kycType, kycNo, vehNo, vehMake, vehModel, vehYear, engineNo, chassisNo,
+                        idv, rmName, rmCode, branch, commPct, docs:[{type,name,url|fileId,path,size}],
+                        remindedFor, remindedAt, renewOf, renewedTo, deleted:bool,
+                        createdBy, createdByName, createdAt, updatedAt, updatedBy }
+                        (dates stored as 'YYYY-MM-DD'; delete = soft delete deleted:true)
+   income/{policyId}  { policyId, policyNo, company, category, rmName, custName, date, premiumCollected,
+                        commission, brokerage, payoutRM, netIncome, payMethod, payRef, createdBy, deleted, updatedAt }
+                        (kept separate from policies so financials are protected by their own rules)
+   policyFiles/{id}   { policyId, type, name, mime, data(base64) }  // only when STORAGE_MODE uses Firestore
+   claims/{id}        { policyId, policyNo, custName, phone, company, category, rmName, claimNo, claimType, status,
+                        intimationDate, incidentDate, place, person, claimAmount, approvedAmount, settledAmount,
+                        settledDate, payRef, remarks, docs:[], history:[{status,note,by,at}], createdBy(=policy owner),
+                        loggedBy, loggedByName, createdAt, updatedAt, deleted }
+   policies extra     status lifecycle: statusDate, statusHistory:[{status,from,date,amount,ref,note,by,at}],
+                        closure:{type,date,amount,ref,note,claimId}, paidUp:{date,value}
+   activityLog/{id}   { at, uid, name, action, target, details }
+
+   ===================================== FIRESTORE RULES =====================================
+   (Firestore > Rules. Replace insurance@wallet4wealth.in with your MASTER_EMAIL.)
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function hasProf() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function prof() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isMaster() { return hasProf() && prof().role == 'master'; }
+    function active() { return hasProf() && prof().active == true; }
+    function can(p) { return isMaster() || (active() && prof().permissions[p] == true); }
+    function owns(d) { return d.createdBy == request.auth.uid; }
+    function onlyKeys(k) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(k); }
+    function finRead() { return can('canViewIncome') || can('canViewPayout'); }
+    function finWrite() { return finRead() && (can('canAddPolicy') || can('canEditPolicy') || can('canUploadBulk')); }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || can('canManageUsers'));
+      allow create: if (signedIn() && request.auth.uid == uid && request.auth.token.email == 'insurance@wallet4wealth.in'
+                        && request.resource.data.role == 'master')
+                    || (can('canManageUsers') && request.resource.data.role == 'user');
+      allow update: if isMaster() || (can('canManageUsers') && resource.data.role == 'user' && request.resource.data.role == 'user');
+      allow delete: if isMaster();
+    }
+    match /settings/{id} {
+      allow read: if active();
+      allow write: if can('canManageSettings');
+    }
+    match /policies/{id} {
+      allow read: if can('canViewAllPolicies') || (active() && owns(resource.data));
+      allow create: if (can('canAddPolicy') || can('canUploadBulk')) && owns(request.resource.data);
+      allow update: if (can('canViewAllPolicies') || (active() && owns(resource.data))) && (
+          (request.resource.data.deleted == true && resource.data.deleted != true && can('canDeletePolicy'))
+       || (request.resource.data.deleted != true && can('canEditPolicy') && request.resource.data.createdBy == resource.data.createdBy)
+       || onlyKeys(['remindedFor','remindedAt','updatedAt','updatedBy']) );
+      allow delete: if isMaster();
+    }
+    match /income/{id} {
+      allow read: if finRead() && (can('canViewAllPolicies') || owns(resource.data));
+      allow create: if finWrite() && (owns(request.resource.data) || can('canViewAllPolicies'));
+      allow update: if (can('canViewAllPolicies') || owns(resource.data))
+                    && (finWrite() || (can('canDeletePolicy') && onlyKeys(['deleted','updatedAt'])));
+      allow delete: if isMaster();
+    }
+    match /policyFiles/{id} {
+      allow read: if active();
+      allow create: if (can('canAddPolicy') || can('canEditPolicy') || can('canUploadBulk')) && request.resource.data.createdBy == request.auth.uid;
+      allow delete: if can('canEditPolicy') || can('canDeletePolicy');
+    }
+    match /claims/{id} {
+      allow read: if can('canViewAllPolicies') || (active() && owns(resource.data));
+      allow create, update: if can('canManageClaims') && (can('canViewAllPolicies') || owns(request.resource.data));
+      allow delete: if isMaster();
+    }
+    match /activityLog/{id} {
+      allow create: if active() && request.resource.data.uid == request.auth.uid;
+      allow read: if can('canManageSettings');
+    }
+  }
+}
+
+   ===================================== STORAGE RULES =====================================
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /policies/{policyId}/{file} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && request.resource.size < 15 * 1024 * 1024;
+      allow delete: if request.auth != null;
+    }
+  }
+}
+
+   ============================ OPTIONAL CLOUD FUNCTION (OCR PROXY) ============================
+   Keeps your AI key secret. Deploy with: firebase deploy --only functions. Then set OCR_CONFIG.proxyUrl.
+
+   // functions/index.js  (Node 20)
+   const { onRequest } = require("firebase-functions/v2/https");
+   const admin = require("firebase-admin"); admin.initializeApp();
+   exports.ocr = onRequest({ cors: true, secrets: ["OPENAI_KEY"] }, async (req, res) => {
+     const tok = (req.headers.authorization || "").replace("Bearer ", "");
+     await admin.auth().verifyIdToken(tok);                          // only logged-in users
+     const { file, name, mime, prompt } = req.body;                   // file = data URL
+     const part = mime === "application/pdf"
+       ? { type: "file", file: { filename: name, file_data: file } }
+       : { type: "image_url", image_url: { url: file } };
+     const r = await fetch("https://api.openai.com/v1/chat/completions", {
+       method: "POST",
+       headers: { "Content-Type": "application/json", Authorization: "Bearer " + process.env.OPENAI_KEY },
+       body: JSON.stringify({ model: "gpt-4o", temperature: 0, response_format: { type: "json_object" },
+         messages: [{ role: "system", content: prompt }, { role: "user", content: [{ type: "text", text: "Extract fields." }, part] }] })
+     });
+     const j = await r.json();
+     res.json(JSON.parse(j.choices[0].message.content));
+   });
+
+   BULK AI ENRICHMENT idea: a Firestore trigger (onDocumentCreated("policyFiles/{id}") or a Storage
+   onObjectFinalized trigger) that sends each uploaded policy copy to the same AI call and writes the
+   extracted fields back into policies/{policyId} with a flag aiFilled:true for staff to verify.
+   ===================================================================================== */
+
+import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, addDoc, deleteDoc, collection, query, where, orderBy, limit, onSnapshot, serverTimestamp, writeBatch, getDocs, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getStorage, ref as sref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+
+/* =====================================================================================
+   ⚙️  CONFIG  —  // PASTE YOUR FIREBASE CONFIG HERE
+   ===================================================================================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyDX6fe5Qa7vf9hb8gQQdbtX8qXXLcFeW1Q",
+  authDomain: "w4w-insurance.firebaseapp.com",
+  projectId: "w4w-insurance",
+  storageBucket: "w4w-insurance.firebasestorage.app",
+  messagingSenderId: "28656169602",
+  appId: "1:28656169602:web:e57c18e602da5bcb283a9b",
+  measurementId: "G-3JDMW75DC1"
+};
+const MASTER_EMAIL = "insurance@wallet4wealth.in";   // the one master/owner account (must match the rules)
+const STORAGE_MODE = "auto";                    // "storage" | "firestore" | "auto"
+
+/* 🤖 OCR / AI — paste ONE of these. proxyUrl wins if set. */
+const OCR_CONFIG = {
+  proxyUrl: "",              // Apps Script Web App URL ".../macros/s/XXXX/exec" (free, key hidden) or a Cloud Function URL
+  provider: "openai",        // "openai" | "google"
+  openaiKey: "",             // "sk-..."  (testing only — visible to anyone who opens the page)
+  openaiModel: "gpt-4o",
+  googleVisionKey: ""        // Google Cloud Vision API key (images only; uses built-in text parser)
+};
+
+/* ================================ CONSTANTS ================================ */
+const PERMS = [
+  ["canAddPolicy","Add Policy"],["canEditPolicy","Edit Policy"],["canDeletePolicy","Delete Policy"],
+  ["canViewIncome","View Income"],["canViewPayout","View Payout"],["canViewAllPolicies","View All Policies"],["canManageClaims","Manage Claims"],
+  ["canUploadBulk","Bulk Upload"],["canDownloadExcel","Download Excel"],["canManageUsers","Manage Users"],["canManageSettings","Manage Settings"]
+];
+const PRESETS = {
+  "Back-office staff": ["canAddPolicy","canEditPolicy","canViewAllPolicies","canUploadBulk","canDownloadExcel","canViewIncome","canManageClaims"],
+  "RM / Agent": ["canAddPolicy"],
+  "Accounts": ["canViewIncome","canViewPayout","canViewAllPolicies","canDownloadExcel"],
+  "Viewer": ["canViewAllPolicies"]
+};
+const DEFAULT_SETTINGS = {
+  branding:{name:"Your Insurance Co.",tagline:"Insurance Back Office",logo:"",icon:"",phone:"",email:"",address:""},
+  companies:[], plans:[], rms:[],
+  categories:["Life","Health","Motor","Other"],
+  frequencies:["Yearly","Half-Yearly","Quarterly","Monthly","Single"],
+  statuses:["Active","Lapsed","Paid-up","Renewed","Cancelled","Matured","Surrendered","Claim Settled"],
+  paymentModes:["Cash","Cheque","UPI","Bank","Online"],
+  branches:["Head Office"],
+  kycTypes:["Aadhaar","PAN","Passport","Voter ID","Driving Licence"],
+  relations:["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Other"],
+  genders:["Male","Female","Other"]
+};
+const LIST_LABELS = {categories:"Policy Categories",frequencies:"Premium Frequencies",statuses:"Policy Statuses",paymentModes:"Payment Methods",branches:"Branches",kycTypes:"KYC / ID Types",relations:"Nominee Relations",genders:"Genders"};
+const FREQ_M = {"Yearly":12,"Half-Yearly":6,"Quarterly":3,"Monthly":1,"Single":0};
+const DOC_TYPES = ["Policy PDF","ID Proof","Receipt","Other"];
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/* Policy field schema — drives the form, bulk import, OCR and exports */
+const F = [
+  {s:"basic",k:"policyNo",l:"Policy Number",req:1},
+  {s:"basic",k:"company",l:"Insurance Company",t:"select",o:()=>S.settings.companies.map(c=>c.name),req:1},
+  {s:"basic",k:"category",l:"Policy Type",t:"select",o:()=>S.settings.categories,req:1},
+  {s:"basic",k:"plan",l:"Plan / Policy Name",t:"list"},
+  {s:"basic",k:"sumAssured",l:"Sum Assured / Insured (₹)",t:"number"},
+  {s:"basic",k:"premium",l:"Premium Amount (₹)",t:"number",req:1},
+  {s:"basic",k:"frequency",l:"Premium Frequency",t:"select",o:()=>S.settings.frequencies},
+  {s:"basic",k:"startDate",l:"Policy Start Date",t:"date",req:1},
+  {s:"basic",k:"endDate",l:"End / Maturity Date",t:"date"},
+  {s:"basic",k:"renewalDate",l:"Next Renewal (auto)",t:"date",ro:1},
+  {s:"basic",k:"status",l:"Status",t:"select",o:()=>S.settings.statuses},
+  {s:"cust",k:"custName",l:"Customer Full Name",req:1},
+  {s:"cust",k:"dob",l:"Date of Birth",t:"date"},
+  {s:"cust",k:"age",l:"Age (auto)",t:"number",ro:1},
+  {s:"cust",k:"gender",l:"Gender",t:"select",o:()=>S.settings.genders},
+  {s:"cust",k:"phone",l:"Phone",t:"tel"},
+  {s:"cust",k:"email",l:"Email",t:"email"},
+  {s:"cust",k:"address",l:"Address",t:"area",w:1},
+  {s:"cust",k:"nomineeName",l:"Nominee Name"},
+  {s:"cust",k:"nomineeRelation",l:"Nominee Relation",t:"select",o:()=>S.settings.relations},
+  {s:"cust",k:"kycType",l:"KYC / ID Type",t:"select",o:()=>S.settings.kycTypes},
+  {s:"cust",k:"kycNo",l:"KYC / ID Number"},
+  {s:"motor",k:"vehNo",l:"Vehicle Number"},
+  {s:"motor",k:"vehMake",l:"Make"},
+  {s:"motor",k:"vehModel",l:"Model"},
+  {s:"motor",k:"vehYear",l:"Manufacturing Year",t:"number"},
+  {s:"motor",k:"engineNo",l:"Engine No."},
+  {s:"motor",k:"chassisNo",l:"Chassis No."},
+  {s:"motor",k:"idv",l:"IDV (₹)",t:"number"},
+  {s:"rm",k:"rmName",l:"RM Name",t:"select",o:()=>S.settings.rms.map(r=>r.name)},
+  {s:"rm",k:"rmCode",l:"RM Code"},
+  {s:"rm",k:"branch",l:"Branch",t:"select",o:()=>S.settings.branches},
+  {s:"rm",k:"commPct",l:"Commission %",t:"number"},
+  {s:"fin",k:"premiumCollected",l:"Premium Collected (₹)",t:"number",p:"canViewIncome"},
+  {s:"fin",k:"commission",l:"Agent Commission (₹)",t:"number",p:"canViewIncome"},
+  {s:"fin",k:"brokerage",l:"Brokerage / Incentive (₹)",t:"number",p:"canViewIncome"},
+  {s:"fin",k:"payoutRM",l:"Payout to RM (₹)",t:"number",p:"canViewPayout"},
+  {s:"fin",k:"netIncome",l:"Net Income (auto)",t:"number",ro:1,p:"canViewIncome"},
+  {s:"fin",k:"payMethod",l:"Payment Method",t:"select",o:()=>S.settings.paymentModes},
+  {s:"fin",k:"payRef",l:"Payment Ref / Txn ID"}
+];
+const FK = Object.fromEntries(F.map(f=>[f.k,f]));
+const FIN_KEYS = F.filter(f=>f.s==="fin").map(f=>f.k);
+const SECTIONS = [["basic","Policy Details"],["cust","Customer / Insured"],["motor","Motor Details"],["rm","RM / Agent"],["fin","Income & Payout"],["docs","Documents"]];
+
+/* ================================ ICONS ================================ */
+const ICONS = {
+  home:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+  file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  rupee:'<path d="M6 3h12M6 8h12M6 13h3c6.67 0 6.67-10 0-10M6 13l8.5 8"/>',
+  upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  bell:'<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  users:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  sliders:'<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
+  logout:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  search:'<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  edit:'<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
+  trash:'<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  eye:'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  refresh:'<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+  scan:'<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/>',
+  x:'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  menu:'<line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>',
+  check:'<polyline points="20 6 9 17 4 12"/>',
+  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  msg:'<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
+  key:'<circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5L21 2M16 7l3 3M18.5 4.5l2 2"/>',
+  clip:'<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  renew:'<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+  chart:'<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  wallet:'<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M16 12h2"/><path d="M2 10h20"/>',
+  claim:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>',
+  flag:'<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>'
+};
+const I = n => `<svg class="i" viewBox="0 0 24 24">${ICONS[n]||""}</svg>`;
+
+/* ================================ HELPERS ================================ */
+const $ = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const rid = () => Math.random().toString(36).slice(2,10);
+const num = v => { if(v===""||v==null) return 0; const n=parseFloat(String(v).replace(/[₹,\s]|rs\.?|inr/gi,"")); return isNaN(n)?0:n; };
+const inr = n => "₹" + Math.round(num(n)).toLocaleString("en-IN");
+const inrC = n => { const v=num(n); return Math.abs(v)>=1e7 ? `₹${(v/1e7).toFixed(2)} Cr` : inr(v); };  // compact for big stat cards
+const pad = n => String(n).padStart(2,"0");
+const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const today = () => ymd(new Date());
+const fmtD = s => { if(!s) return "—"; const [y,m,d]=String(s).split("-"); return m?`${d}-${MON[+m-1]}-${y}`:s; };
+const fmtTs = ms => ms ? new Date(ms).toLocaleString("en-IN",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}) : "—";
+const debounce = (fn,ms=250)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+const isMotor = c => String(c||"").toLowerCase()==="motor";
+const initials = s => String(s||"?").trim().split(/\s+/).slice(0,2).map(w=>w[0]).join("").toUpperCase();
+function addMonths(s,m){ const [y,mo,d]=s.split("-").map(Number); const t=new Date(y,mo-1+m,1); const last=new Date(t.getFullYear(),t.getMonth()+1,0).getDate(); t.setDate(Math.min(d,last)); return ymd(t); }
+const daysTo = s => Math.round((new Date(s+"T00:00:00") - new Date(today()+"T00:00:00"))/864e5);
+function calcAge(dob){ if(!dob) return ""; const b=new Date(dob+"T00:00:00"), n=new Date(); let a=n.getFullYear()-b.getFullYear(); if(n.getMonth()<b.getMonth()||(n.getMonth()===b.getMonth()&&n.getDate()<b.getDate())) a--; return a>=0&&a<130?a:""; }
+/* Next premium/renewal due date: steps from start by frequency until >= today, capped at end date */
+function nextDue(p){
+  const s=p.startDate, e=p.endDate;
+  if(!s) return e||"";
+  const m = FREQ_M[p.frequency] ?? 12;
+  if(!m) return e||"";
+  const t=today(); let k=1, d=addMonths(s,m);
+  while(d<t && k<1200){ k++; d=addMonths(s,m*k); }
+  if(e && d>e) d=e;
+  return d;
+}
+function parseDate(v){
+  if(v==null||v==="") return "";
+  if(v instanceof Date && !isNaN(v)) return ymd(v);
+  if(typeof v==="number"){ const d=new Date(Math.round((v-25569)*864e5)); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`; }
+  const s=String(v).trim(); let m;
+  if((m=s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/))) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+  if((m=s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})$/))){ let y=+m[3]; if(y<100) y+=y>50?1900:2000; if(+m[2]>12) return null; return `${y}-${pad(m[2])}-${pad(m[1])}`; }
+  if((m=s.match(/^(\d{1,2})[-\s\/]([A-Za-z]{3})[A-Za-z]*[-\s\/,]+(\d{2,4})$/))){ const mi=MON.findIndex(x=>x.toLowerCase()===m[2].toLowerCase()); if(mi>=0){ let y=+m[3]; if(y<100) y+=2000; return `${y}-${pad(mi+1)}-${pad(m[1])}`; } }
+  if(/^\d{5}$/.test(s)) return parseDate(+s);
+  const d=new Date(s); return isNaN(d)?null:ymd(d);
+}
+function fileToDataURL(f){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(f); }); }
+function compressImage(file,max=1600,q=.72,type="image/jpeg"){
+  return new Promise((res)=>{ const img=new Image(); const u=URL.createObjectURL(file);
+    img.onload=()=>{ const sc=Math.min(1,max/Math.max(img.width,img.height)); const c=document.createElement("canvas"); c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc);
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(u);
+      c.toBlob(b=>res(b?new File([b],file.name.replace(/\.\w+$/,"")+(type==="image/png"?".png":".jpg"),{type}):file),type,q); };
+    img.onerror=()=>res(file); img.src=u; });
+}
+async function imgToSmallDataURL(file,max=256,type="image/png"){ const f=await compressImage(file,max,.9,type); return fileToDataURL(f); }
+
+/* ================================ UI PRIMITIVES ================================ */
+function toast(msg,type="",action){
+  const t=document.createElement("div"); t.className="toast "+type;
+  t.innerHTML=`<span>${esc(msg)}</span>${action?`<button>${esc(action.label)}</button>`:""}`;
+  if(action) t.querySelector("button").onclick=()=>{ action.fn(); t.remove(); };
+  $("#toasts").appendChild(t); setTimeout(()=>t.remove(), action?9000:3800);
+}
+function openModal({title,body,footer="",wide=false,onClose}){
+  const bg=document.createElement("div"); bg.className="mb";
+  bg.innerHTML=`<div class="md ${wide?"wide":""}"><div class="md-h"><h3>${title}</h3><button class="btn g ic" data-x>${I("x")}</button></div><div class="md-b">${body}</div>${footer?`<div class="md-f">${footer}</div>`:""}</div>`;
+  const close = async(force)=>{ if(!force && onClose && (await onClose())===false) return; bg.remove(); };
+  bg.addEventListener("mousedown",e=>{ if(e.target===bg) close(); });
+  bg.querySelector("[data-x]").onclick=()=>close();
+  bg._close=close; $("#modalRoot").appendChild(bg); return bg;
+}
+function confirmBox(msg,okLabel="Confirm",danger=false){
+  return new Promise(res=>{ const m=openModal({title:"Please confirm",body:`<p style="line-height:1.6">${esc(msg)}</p>`,
+    footer:`<button class="btn" data-c>Cancel</button><button class="btn ${danger?"o":"p"}" data-ok>${esc(okLabel)}</button>`,onClose:()=>{res(false);}});
+    m.querySelector("[data-c]").onclick=()=>m._close(); m.querySelector("[data-ok]").onclick=()=>{ res(true); m._close(true); }; });
+}
+function promptBox(title,label,val=""){
+  return new Promise(res=>{ const m=openModal({title,body:`<label class="f">${esc(label)}<input class="in" id="pbIn" value="${esc(val)}"></label>`,
+    footer:`<button class="btn" data-c>Cancel</button><button class="btn p" data-ok>Save</button>`,onClose:()=>{res(null);}});
+    const inp=m.querySelector("#pbIn"); inp.focus(); inp.select();
+    const ok=()=>{ res(inp.value.trim()); m._close(true); };
+    m.querySelector("[data-c]").onclick=()=>m._close(); m.querySelector("[data-ok]").onclick=ok; inp.onkeydown=e=>{ if(e.key==="Enter") ok(); }; });
+}
+const statusBadge = s => { const c={Active:"gr",Lapsed:"er",Renewed:"bl",Cancelled:"gy","Paid-up":"or",Matured:"bl",Surrendered:"wa","Claim Settled":"kk"}[s]||"gy"; return `<span class="bd ${c}">${esc(s||"—")}</span>`; };
+const catBadge = c => { const k=String(c||"").toLowerCase(); const cl={life:"bl",health:"or",motor:"kk"}[k]||"gy"; return `<span class="bd ${cl}">${esc(c||"—")}</span>`; };
+const emptyRow = (cols,msg) => `<tr><td colspan="${cols}"><div class="empty">${I("file")}<div>${esc(msg)}</div></div></td></tr>`;
+
+/* ================================ FIREBASE INIT ================================ */
+window.__ibStarted=true;   // tells the loading watchdog the app script loaded
+const CONFIG_OK = !String(firebaseConfig.apiKey).startsWith("PASTE");
+let app, auth, db, storage=null;
+if(CONFIG_OK){
+  app=initializeApp(firebaseConfig); auth=getAuth(app); db=getFirestore(app);
+  if(STORAGE_MODE!=="firestore" && firebaseConfig.storageBucket){ try{ storage=getStorage(app); storage.maxUploadRetryTime=15000; }catch(e){ storage=null; } }
+}
+
+/* ================================ STATE ================================ */
+const S = { user:null, profile:null, settings:structuredClone(DEFAULT_SETTINGS), policies:{}, income:{}, claims:{}, users:[], unsubs:[], page:"dashboard", charts:{}, shell:{}, synced:{} };
+const isMaster = () => S.profile?.role==="master";
+const can = p => isMaster() || (S.profile?.active!==false && !!S.profile?.permissions?.[p]);
+const finAny = () => can("canViewIncome") || can("canViewPayout");
+const fAllowed = f => f.s!=="fin" || (f.p ? can(f.p) : finAny());
+
+/* ================================ LINE OF BUSINESS TABS ================================
+   Top-bar tabs: All · Life · Health · Motor · Other (from Settings > Dropdowns > Policy Categories).
+   The selected tab filters Dashboard, Policies, Income & Payout, Renewals and every export. */
+S.lob = (()=>{ try{ return localStorage.getItem("ib_lob")||"All"; }catch{ return "All"; } })();
+const LOB_COLORS = {life:"#2563EB",health:"#F97316",motor:"#111111",other:"#9CA3AF"};
+const catColor = c => LOB_COLORS[String(c||"").toLowerCase()] || "#6B7280";
+const inLob = c => S.lob==="All" || c===S.lob;
+const lobPolicies = () => Object.values(S.policies).filter(p=>inLob(p.category));
+const lobIncome = () => Object.values(S.income).filter(x=>inLob(x.category));
+const lobTitle = s => S.lob==="All" ? s : `${S.lob} ${s}`;
+const lobFile = s => S.lob==="All" ? s : `${S.lob}_${s}`;
+const LOB_PAGES = ["dashboard","policies","income","bulk","renewals","claims"];
+function renderLob(){
+  const box=$("#lobTabs"); if(!box) return;
+  box.classList.toggle("hidden",!LOB_PAGES.includes(S.page));
+  const counts={All:0};
+  if(S.page==="renewals") renewalItems(true).filter(r=>!r.reminded).forEach(r=>{ counts.All++; counts[r.p.category]=(counts[r.p.category]||0)+1; });
+  else if(S.page==="claims") openClaims().forEach(c=>{ counts.All++; counts[c.category]=(counts[c.category]||0)+1; });
+  else Object.values(S.policies).forEach(p=>{ counts.All++; counts[p.category]=(counts[p.category]||0)+1; });
+  box.innerHTML=["All",...S.settings.categories].map(c=>`<button class="${S.lob===c?"on":""}" data-lob="${esc(c)}" title="${S.page==="renewals"?"Pending renewals":S.page==="claims"?"Open claims":"Policies"}"><i style="background:${c==="All"?"linear-gradient(135deg,var(--o),var(--b2))":catColor(c)}"></i>${esc(c)}${counts[c]?`<small>${counts[c].toLocaleString("en-IN")}</small>`:""}</button>`).join("");
+}
+function setLob(c){
+  S.lob=c; try{ localStorage.setItem("ib_lob",c); }catch{}
+  PT.page=1; PT.cat=""; IT.page=1; IT.cat=""; S.shell.policies=false; S.shell.income=false; S.shell.claims=false; CT.page=1;
+  renderPage(true);
+}
+
+function logAct(action,target="",details=""){
+  if(!S.user) return;
+  addDoc(collection(db,"activityLog"),{at:serverTimestamp(),uid:S.user.uid,name:S.profile?.name||S.user.email,action,target:String(target),details:String(details)}).catch(()=>{});
+}
+
+/* ================================ LOCAL CACHE (IndexedDB) ================================ */
+const IDB = {
+  _p:null,
+  open(){ return this._p ||= new Promise((res,rej)=>{ const r=indexedDB.open("ib-cache",1); r.onupgradeneeded=()=>r.result.createObjectStore("kv"); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); },
+  async get(k){ try{ const d=await this.open(); return await new Promise(res=>{ const q=d.transaction("kv").objectStore("kv").get(k); q.onsuccess=()=>res(q.result); q.onerror=()=>res(null); }); }catch{ return null; } },
+  async set(k,v){ try{ const d=await this.open(); await new Promise(res=>{ const tx=d.transaction("kv","readwrite"); tx.objectStore("kv").put(v,k); tx.oncomplete=res; tx.onerror=res; }); }catch{} },
+  async clear(){ try{ const d=await this.open(); await new Promise(res=>{ const tx=d.transaction("kv","readwrite"); tx.objectStore("kv").clear(); tx.oncomplete=res; tx.onerror=res; }); }catch{} }
+};
+function plain(d){ for(const k in d){ const v=d[k]; if(v && typeof v.toMillis==="function") d[k]=v.toMillis(); } return d; }
+
+/* Delta sync: cached records + live listener on records updated after last sync */
+async function startSync(coll){
+  const viewAll=can("canViewAllPolicies");
+  const ck=`${coll}:${S.user.uid}:${viewAll?"all":"own"}`;
+  const cache=(await IDB.get(ck)) || {map:{},last:0};
+  S[coll]=cache.map; refresh();
+  const conds=[where("updatedAt",">",Timestamp.fromMillis(cache.last))];
+  if(!viewAll) conds.unshift(where("createdBy","==",S.user.uid));
+  let saveT;
+  const un=onSnapshot(query(collection(db,coll),...conds),{includeMetadataChanges:true},snap=>{
+    let changed=false;
+    for(const ch of snap.docChanges({includeMetadataChanges:true})){
+      changed=true; const id=ch.doc.id;
+      if(ch.type==="removed"){ delete cache.map[id]; continue; }
+      const d=plain(ch.doc.data({serverTimestamps:"estimate"})); d.id=id;
+      if(d.deleted) delete cache.map[id]; else cache.map[id]=d;
+      if(!ch.doc.metadata.hasPendingWrites && d.updatedAt) cache.last=Math.max(cache.last,d.updatedAt);
+    }
+    S.synced[coll]=true; setSync("ok");
+    if(changed){ clearTimeout(saveT); saveT=setTimeout(()=>IDB.set(ck,cache),1500); refresh(); }
+  },err=>{ console.error(`[${coll}]`,err); setSync("er",err.code); toast(`Sync error (${coll}): ${err.code||err.message}. Check console for index link.`,"er"); });
+  S.unsubs.push(un);
+}
+function setSync(st,msg){
+  const el=$("#sync"); el.className="sync "+st;
+  el.querySelector("span").textContent = st==="ok" ? `Live · ${Object.keys(S.policies).length.toLocaleString("en-IN")} policies` : st==="er" ? `Sync error ${msg||""}` : "Connecting…";
+}
+
+/* ================================ AUTH FLOW ================================ */
+function showLogin(err){
+  $("#loader").classList.add("hidden"); $("#appView").classList.add("hidden"); $("#loginView").classList.remove("hidden");
+  $("#cfgWarn").classList.toggle("hidden",CONFIG_OK);
+  const e=$("#lgErr"); e.classList.toggle("hidden",!err); e.textContent=err||"";
+  try{ const b=JSON.parse(localStorage.getItem("ib_brand")||"null"); if(b){ $("#lgBrand").innerHTML=b.logo?`<div class="lg-logo"><img src="${esc(b.logo)}" alt="${esc(b.name)}"></div>`:`<div class="mark">${esc(initials(b.name))}</div><span>${esc(b.name)}</span>`; $("#lgLogoR").innerHTML=b.logo?`<img src="${esc(b.logo)}" alt="">`:""; $("#lgContact").textContent=[b.phone,b.email].filter(Boolean).join(" · "); } }catch{}
+}
+$("#loginForm").onsubmit=async e=>{
+  e.preventDefault(); if(!CONFIG_OK) return;
+  const btn=$("#lgBtn"); btn.disabled=true; btn.innerHTML='<div class="spin"></div>';
+  try{ await signInWithEmailAndPassword(auth,$("#lgEmail").value.trim(),$("#lgPass").value); }
+  catch(err){ showLogin(err.code==="auth/invalid-credential"?"Invalid email or password.":err.message); }
+  finally{ btn.disabled=false; btn.textContent="Sign in"; }
+};
+$("#lgForgot").onclick=async()=>{
+  const em=$("#lgEmail").value.trim(); if(!em) return showLogin("Enter your email first, then click Forgot password.");
+  try{ await sendPasswordResetEmail(auth,em); toast("Password reset email sent.","ok"); }catch(err){ showLogin(err.message); }
+};
+function cleanup(){ S.unsubs.forEach(u=>{ try{u();}catch{} }); S.unsubs=[]; S.policies={}; S.income={}; S.claims={}; S.users=[]; S.shell={}; S.synced={}; Object.values(S.charts).forEach(c=>c.destroy()); S.charts={}; }
+
+if(CONFIG_OK){
+  onAuthStateChanged(auth, async user=>{
+    cleanup();
+    if(!user) return showLogin();
+    try{
+      let snap=await getDoc(doc(db,"users",user.uid));
+      if(!snap.exists()){
+        if(user.email.toLowerCase()===MASTER_EMAIL.toLowerCase()){
+          await setDoc(doc(db,"users",user.uid),{email:user.email,name:"Master Admin",role:"master",active:true,permissions:Object.fromEntries(PERMS.map(p=>[p[0],true])),createdAt:serverTimestamp()});
+          const st=await getDoc(doc(db,"settings","main"));
+          if(!st.exists()) await setDoc(doc(db,"settings","main"),DEFAULT_SETTINGS);
+          snap=await getDoc(doc(db,"users",user.uid));
+        } else { await signOut(auth); return showLogin("No access profile found for this account. Ask the master admin to create your user."); }
+      }
+      const prof=snap.data();
+      if(prof.active===false){ await signOut(auth); return showLogin("Your account has been disabled by the administrator."); }
+      S.user=user; S.profile=prof; enterApp();
+    }catch(err){ console.error(err); await signOut(auth).catch(()=>{}); showLogin("Could not load your profile: "+err.message); }
+  });
+} else showLogin();
+
+function enterApp(){
+  $("#loader").classList.add("hidden"); $("#loginView").classList.add("hidden"); $("#appView").classList.remove("hidden");
+  $$(".nv[data-ic]").forEach(n=>{ if(!n.querySelector("svg")) n.insertAdjacentHTML("afterbegin",I(n.dataset.ic)); n.title=n.querySelector(".lb")?.textContent||""; });
+  $("#burger").innerHTML=I("menu"); $("#bellBtn").insertAdjacentHTML("afterbegin",I("bell"));
+  $("#avBtn").textContent=initials(S.profile.name||S.user.email);
+  applyPerms(); setSync("");
+  // settings (live)
+  S.unsubs.push(onSnapshot(doc(db,"settings","main"),s=>{
+    S.settings={...structuredClone(DEFAULT_SETTINGS),...(s.data()||{})};
+    S.settings.branding={...DEFAULT_SETTINGS.branding,...(S.settings.branding||{})};
+    if(S.lob!=="All" && !S.settings.categories.includes(S.lob)) S.lob="All";
+    S.settings.statuses=[...new Set([...(S.settings.statuses||[]),...ALL_ST])];
+    applyBranding(); S.shell.policies=false; S.shell.income=false;
+    if(["settings","policies","income"].includes(S.page)) renderPage(true); else refresh();
+  },err=>toast("Settings: "+err.code,"er")));
+  // own profile (live) — permission change => reload
+  let first=true;
+  S.unsubs.push(onSnapshot(doc(db,"users",S.user.uid),s=>{
+    const p=s.data(); if(first){ first=false; S.profile=p; return; }
+    if(!p || p.active===false){ toast("Your access was revoked.","er"); setTimeout(()=>signOut(auth),1200); return; }
+    if(JSON.stringify(p.permissions)!==JSON.stringify(S.profile.permissions) || p.role!==S.profile.role){ toast("Your permissions changed — reloading…","wa"); setTimeout(()=>location.reload(),1200); }
+    S.profile=p;
+  }));
+  startSync("policies");
+  if(finAny()) startSync("income");
+  startSync("claims");
+  if(can("canManageUsers")) S.unsubs.push(onSnapshot(collection(db,"users"),s=>{ S.users=s.docs.map(d=>({id:d.id,...d.data()})); if(S.page==="users") renderUsers(); }));
+  go((location.hash||"#dashboard").slice(1));
+  const dk=draftKey("new");
+  if(localStorage.getItem(dk) && can("canAddPolicy")) toast("You have an unsaved policy draft.","wa",{label:"Resume",fn:()=>openPolicy("add")});
+}
+function applyPerms(root=document){
+  $$("[data-perm]",root).forEach(e=>e.classList.toggle("hidden",!e.dataset.perm.split("|").some(can)));
+  $$("[data-master]",root).forEach(e=>e.classList.toggle("hidden",!isMaster()));
+}
+function applyBranding(){
+  const b=S.settings.branding;
+  const icon=b.icon?`<img src="${esc(b.icon)}" alt="">`:`<div class="mark">${esc(initials(b.name))}</div>`;
+  $("#sbBrand").className="sb-brand"+(b.logo?"":" txt");
+  $("#sbBrand").innerHTML=b.logo
+    ? `<div class="sb-logo"><img src="${esc(b.logo)}" alt="${esc(b.name)}"></div><div class="sb-ic">${icon}</div><small class="sb-tag">${esc(b.tagline||"Insurance Back Office")}</small>`
+    : `<div class="sb-ic">${icon}</div><div class="sb-txt"><b>${esc(b.name)}</b><small>${esc(b.tagline||"Insurance Back Office")}</small></div>`;
+  $("#sbFoot").innerHTML=[b.phone,b.email,b.address].filter(Boolean).map(esc).join("<br>") || "© "+new Date().getFullYear();
+  document.title=`${b.name} · Back Office`;
+  try{ localStorage.setItem("ib_brand",JSON.stringify({name:b.name,logo:b.logo,phone:b.phone,email:b.email})); }catch{}
+}
+
+/* ================================ ROUTER ================================ */
+const PAGES = {
+  dashboard:["Dashboard",()=>renderDashboard()],
+  policies:["Policies",()=>renderPolicies()],
+  income:["Income & Payout",()=>renderIncome()],
+  bulk:["Bulk Upload / Export",()=>renderBulk()],
+  renewals:["Renewal Reminders",()=>renderRenewals()],
+  claims:["Claims",()=>renderClaims()],
+  users:["Users & Permissions",()=>renderUsers()],
+  settings:["Settings",()=>renderSettings()]
+};
+function go(pg){
+  const nav=$(`.nv[data-page="${pg}"]`);
+  if(!PAGES[pg] || !nav || nav.classList.contains("hidden")) pg="dashboard";
+  S.page=pg; history.replaceState(null,"","#"+pg);
+  $$(".nv").forEach(n=>n.classList.toggle("on",n.dataset.page===pg));
+  $$(".page").forEach(p=>p.classList.toggle("hidden",p.id!=="pg-"+pg));
+  $("#pgTitle").textContent=PAGES[pg][0];
+  $("#sb").classList.remove("open"); $(".ov")?.remove();
+  renderPage(true);
+}
+function renderPage(full){ if(full) S.shell[S.page]=false; PAGES[S.page]?.[1](); updateBadges(); }
+const refresh = debounce(()=>{
+  if(!S.user) return;
+  updateBadges(); if(S.synced.policies) setSync("ok");
+  if(["dashboard","policies","income","renewals","claims"].includes(S.page)) PAGES[S.page][1]();
+},200);
+$("#nav").addEventListener("click",e=>{ const n=e.target.closest(".nv"); if(!n) return; if(n.id==="navLogout") return doLogout(); go(n.dataset.page); });
+/* Menu button: desktop = collapse/expand side menu (remembered), mobile = open drawer */
+try{ if(localStorage.getItem("ib_sbc")) document.body.classList.add("sbc"); }catch{}
+$("#lobTabs").onclick=e=>{ const b=e.target.closest("[data-lob]"); if(b) setLob(b.dataset.lob); };
+$("#burger").onclick=()=>{
+  if(window.innerWidth>900){ const v=!document.body.classList.contains("sbc"); document.body.classList.toggle("sbc",v); try{ localStorage.setItem("ib_sbc",v?"1":""); }catch{} return; }
+  $("#sb").classList.add("open"); const o=document.createElement("div"); o.className="ov"; o.onclick=()=>{ $("#sb").classList.remove("open"); o.remove(); }; document.body.appendChild(o); };
+document.addEventListener("click",e=>{ const g=e.target.closest("[data-go]"); if(g){ e.preventDefault(); go(g.dataset.go); } });
+async function doLogout(){ if(await confirmBox("Log out of the back office?","Logout")){ logAct("logout"); await signOut(auth); location.hash=""; } }
+
+/* top bar: bell + avatar */
+function closeDD(){ $$(".dd").forEach(d=>d.remove()); }
+document.addEventListener("mousedown",e=>{ if(!e.target.closest(".dd") && !e.target.closest("#bellBtn") && !e.target.closest("#avBtn")) closeDD(); });
+$("#bellBtn").onclick=()=>{
+  if($(".dd")){ closeDD(); return; }
+  const items=renewalItems(true).filter(r=>!r.reminded).slice(0,12);
+  const dd=document.createElement("div"); dd.className="dd";
+  dd.innerHTML=`<div class="dd-h"><b>Renewal alerts</b><a data-go="renewals">View all</a></div><div class="dd-b">${items.length?items.map(r=>`<div class="dd-i" data-id="${r.p.id}">${dueBadge(r.days)}<div><b>${esc(r.p.custName)}</b><small>${esc(r.p.company)} · ${esc(r.p.policyNo)} · ${fmtD(r.due)}</small></div></div>`).join(""):`<div class="empty">All caught up 🎉</div>`}</div>`;
+  dd.onclick=e=>{ const i=e.target.closest("[data-id]"); if(i){ closeDD(); openPolicy("view",S.policies[i.dataset.id]); } if(e.target.closest("[data-go]")) closeDD(); };
+  document.body.appendChild(dd);
+};
+$("#avBtn").onclick=()=>{
+  if($(".dd")){ closeDD(); return; }
+  const dd=document.createElement("div"); dd.className="dd dd-u";
+  dd.innerHTML=`<div class="dd-h"><div><b>${esc(S.profile.name||"")}</b><br><small class="mu">${esc(S.user.email)} · ${isMaster()?"Master":"User"}</small></div></div>
+  <div class="dd-i" data-a="resync">${I("refresh")} Resync data from server</div>
+  <div class="dd-i" data-a="pwd">${I("key")} Change password (email link)</div>
+  <div class="dd-i" data-a="out" style="color:var(--er)">${I("logout")} Logout</div>`;
+  dd.onclick=async e=>{ const a=e.target.closest("[data-a]")?.dataset.a; if(!a) return; closeDD();
+    if(a==="out") doLogout();
+    if(a==="pwd"){ await sendPasswordResetEmail(auth,S.user.email); toast("Password reset link sent to your email.","ok"); }
+    if(a==="resync"){ await IDB.clear(); location.reload(); } };
+  document.body.appendChild(dd);
+};
+
+/* ================================ RENEWAL LOGIC ================================ */
+function renewalItems(all=false){   // all=true ignores the selected LOB tab (bell + menu badge)
+  const out=[];
+  for(const p of Object.values(S.policies)){
+    if(!all && !inLob(p.category)) continue;
+    const pu=p.status==="Paid-up";                       // paid-up: no premiums, only maturity
+    if(p.status && p.status!=="Active" && !pu) continue;
+    const due=pu?p.endDate:nextDue(p); if(!due) continue;
+    const days=daysTo(due); if(days>30 || days<-60) continue;
+    out.push({p,due,days,reminded:p.remindedFor===due,kind:isLife(p.category)?(p.endDate&&due===p.endDate?"Maturity":"Premium"):"Renewal"});
+  }
+  return out.sort((a,b)=>a.days-b.days);
+}
+const dueBadge = d => d<0?`<span class="bd er">${-d}d overdue</span>`:d===0?`<span class="bd er">Today</span>`:d<=1?`<span class="bd er">Tomorrow</span>`:d<=7?`<span class="bd or">${d} days</span>`:d<=15?`<span class="bd wa">${d} days</span>`:`<span class="bd bl">${d} days</span>`;
+function updateBadges(){
+  $("#cntPol").textContent=Object.keys(S.policies).length.toLocaleString("en-IN");
+  const n=renewalItems(true).filter(r=>!r.reminded).length; renderLob();
+  const oc=openClaims().length; $("#cntClm").textContent=oc; $("#cntClm").classList.toggle("hidden",!oc);
+  $("#cntRen").textContent=n; $("#cntRen").classList.toggle("hidden",!n);
+  $("#bellDot").textContent=n>99?"99+":n; $("#bellDot").classList.toggle("hidden",!n);
+}
+/* Placeholder: wire to WhatsApp Business API / SMS / email provider later */
+async function sendReminderAPI(policy,channel="whatsapp"){
+  // Example: await fetch("https://your-function-url/sendReminder",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+await auth.currentUser.getIdToken()},body:JSON.stringify({policyId:policy.id,channel})});
+  return true;
+}
+function reminderText(p,due){
+  if(isLife(p.category) && p.endDate && due===p.endDate)
+    return `Dear ${p.custName}, your ${p.company||""} ${p.plan||""} policy (${p.policyNo}) matures on ${fmtD(due)}. Please keep the original policy bond, a cancelled cheque and your KYC ready so we can process the maturity claim quickly. – ${S.settings.branding.name}${S.settings.branding.phone?" ("+S.settings.branding.phone+")":""}`;
+  return `Dear ${p.custName}, your ${p.company||""} ${p.plan||""} policy (${p.policyNo}) premium of ${inr(p.premium)} is due on ${fmtD(due)}. Kindly renew on time to stay protected. – ${S.settings.branding.name}${S.settings.branding.phone?" ("+S.settings.branding.phone+")":""}`;
+}
+function openWhatsApp(p,due){
+  let ph=String(p.phone||"").replace(/\D/g,""); if(ph.length===10) ph="91"+ph;
+  if(!ph) return toast("No phone number on this policy.","er");
+  window.open(`https://wa.me/${ph}?text=${encodeURIComponent(reminderText(p,due))}`,"_blank");
+  sendReminderAPI(p,"whatsapp");
+}
+async function markReminded(p,due){
+  try{ await updateDoc(doc(db,"policies",p.id),{remindedFor:due,remindedAt:serverTimestamp(),updatedAt:serverTimestamp(),updatedBy:S.user.uid}); toast("Marked as reminded.","ok"); logAct("renewal.reminded",p.policyNo,due); }
+  catch(e){ toast("Could not mark: "+e.code,"er"); }
+}
+
+/* ================================ DASHBOARD ================================ */
+/* One dashboard per line of business — the top-bar tab decides (All / Life / Health / Motor / …) */
+function groupReport(P,key){
+  const g={};
+  P.forEach(p=>{ const k=p[key]||"Unassigned"; const x=(g[k]??={n:0,act:0,prem:0,comm:0,pay:0});
+    x.n++; if(p.status==="Active") x.act++; if(p.status!=="Cancelled") x.prem+=num(p.premium);
+    const f=S.income[p.id]; if(f){ x.comm+=num(f.commission)+num(f.brokerage); x.pay+=num(f.payoutRM); } });
+  return Object.entries(g).sort((a,b)=>b[1].prem-a[1].prem);
+}
+function reportTable(title,label,rows,lim=8){
+  const ci=can("canViewIncome"), cp=can("canViewPayout");
+  return `<div class="card p0"><div class="tbar"><h3>${esc(title)}</h3></div><div class="tw"><table class="tbl"><thead><tr><th>${esc(label)}</th><th class="r">Policies</th><th class="r">Active</th><th class="r">Premium</th>${ci?'<th class="r">Commission</th>':""}${cp?'<th class="r">Payout</th>':""}</tr></thead>
+    <tbody>${rows.slice(0,lim).map(([k,v])=>`<tr><td><b>${esc(k)}</b></td><td class="r">${v.n.toLocaleString("en-IN")}</td><td class="r">${v.act.toLocaleString("en-IN")}</td><td class="r"><b>${inr(v.prem)}</b></td>${ci?`<td class="r">${inr(v.comm)}</td>`:""}${cp?`<td class="r">${inr(v.pay)}</td>`:""}</tr>`).join("")||emptyRow(6,"No data yet")}</tbody></table></div></div>`;
+}
+function renderDashboard(){
+  const el=$("#pg-dashboard"); const L=S.lob, k=L.toLowerCase(), P=lobPolicies(), IN=lobIncome();
+  const live=P.filter(p=>p.status!=="Cancelled");
+  const active=P.filter(p=>p.status==="Active").length;
+  const prem=live.reduce((a,p)=>a+num(p.premium),0);
+  const due=renewalItems().filter(r=>!r.reminded);
+  const comm=IN.reduce((a,x)=>a+num(x.commission)+num(x.brokerage),0), pay=IN.reduce((a,x)=>a+num(x.payoutRM),0);
+  const stat=(c,ic,l,v,s)=>`<div class="stat ${c}"><div class="si">${I(ic)}</div><div><span>${l}</span><b>${v}</b><small>${s}</small></div></div>`;
+  let extra="";
+  if(isMotor(L)){
+    const veh=new Set(live.map(p=>String(p.vehNo||"").replace(/[^a-z0-9]/gi,"").toUpperCase()).filter(Boolean)).size;
+    extra=stat("k","shield","Total IDV",inrC(live.reduce((a,p)=>a+num(p.idv),0)),`${veh.toLocaleString("en-IN")} vehicles insured`);
+  } else if(L!=="All"){
+    extra=stat("k","shield",k==="health"?"Total Sum Insured":"Total Sum Assured",inrC(live.reduce((a,p)=>a+num(p.sumAssured),0)),`Avg premium ${inr(live.length?prem/live.length:0)}`);
+  }
+  const mix = L!=="All" ? "" : `<div class="mix">${S.settings.categories.map(c=>{
+      const cp=P.filter(p=>p.category===c), cr=due.filter(r=>r.p.category===c).length;
+      return `<div class="mixc" data-lob="${esc(c)}" style="--c:${catColor(c)}"><div class="mixh"><b>${esc(c)}</b><span>Open dashboard →</span></div>
+        <div class="mixg"><div><small>Policies</small><b>${cp.length.toLocaleString("en-IN")}</b></div><div><small>Premium</small><b>${inr(cp.filter(p=>p.status!=="Cancelled").reduce((a,p)=>a+num(p.premium),0))}</b></div><div><small>Renewals due</small><b>${cr}</b></div></div></div>`; }).join("")}</div>`;
+  const stc=S.settings.statuses.map(s=>[s,P.filter(p=>p.status===s).length]).filter(x=>x[1]);
+  const stRow=stc.length?`<div class="stchips">${stc.map(([s,n])=>`<button class="stchip" data-st="${esc(s)}" title="Show these policies">${statusBadge(s)}<b>${n.toLocaleString("en-IN")}</b></button>`).join("")}</div>`:"";
+  const recent=[...P].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0,6);
+  const h=new Date().getHours();
+  el.innerHTML=`
+  <div class="ph"><div><h2>${L==="All"?`Good ${h<12?"morning":h<17?"afternoon":"evening"}, ${esc((S.profile.name||"").split(" ")[0])}`:`${esc(L)} Dashboard`}</h2>
+    <p>${L==="All"?"All lines of business":esc(L)+" insurance only"} · ${new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p></div>
+  <div class="ph-a">${can("canAddPolicy")?`<button class="btn o" data-add>${I("plus")}Add ${L==="All"?"":esc(L)+" "}Policy</button>`:""}</div></div>
+  <div class="stats">
+    ${stat("b","file",L==="All"?"Total Policies":`${esc(L)} Policies`,P.length.toLocaleString("en-IN"),`${active.toLocaleString("en-IN")} active`)}
+    ${stat("o","rupee","Total Premium",inrC(prem),"excluding cancelled")}
+    ${stat("k","bell","Renewals Due (30d)",due.length,`${due.filter(r=>r.days<0).length} overdue`)}
+    ${(()=>{ const oc=lobClaims().filter(c=>!CLAIM_DONE.includes(c.status)); return stat("b","claim","Open Claims",oc.length,`${inrC(oc.reduce((a,c)=>a+num(c.claimAmount),0))} claimed`); })()}
+    ${extra}
+    ${can("canViewIncome")?stat("gr","chart","Commission Earned",inrC(comm),`${IN.length.toLocaleString("en-IN")} income records`):""}
+    ${can("canViewPayout")?stat("b","wallet","RM Payout",inrC(pay),can("canViewIncome")?`Net ${inr(comm-pay)}`:""):""}
+  </div>
+  ${stRow}
+  ${mix}
+  <div class="g2">
+    <div class="card"><div class="ch"><h3>Premium booked · last 12 months</h3><span class="mu" style="font-size:12px">by start date</span></div><div class="cv"><canvas id="chMonth"></canvas></div></div>
+    <div class="card"><div class="ch"><h3>${L==="All"?"Policies by type":"Policies by company"}</h3></div><div class="cv"><canvas id="chCat"></canvas></div></div>
+  </div>
+  <div class="g2e">
+    <div class="card"><div class="ch"><h3>Upcoming renewals</h3><a data-go="renewals">View all →</a></div>
+      ${due.length?due.slice(0,6).map(r=>`<div class="list-i" data-id="${r.p.id}" style="cursor:pointer"><div class="di"><b>${new Date(r.due+"T00:00").getDate()}</b><small>${MON[new Date(r.due+"T00:00").getMonth()]}</small></div><div class="tx"><b>${esc(r.p.custName)}</b><small>${esc(r.p.company)} · ${esc(r.p.policyNo)} · ${inr(r.p.premium)}</small></div>${dueBadge(r.days)}</div>`).join(""):`<div class="empty">No renewals due in the next 30 days.</div>`}
+    </div>
+    <div class="card"><div class="ch"><h3>Recently added</h3><a data-go="policies">All policies →</a></div>
+      ${recent.length?recent.map(p=>`<div class="list-i" data-id="${p.id}" style="cursor:pointer"><div class="di">${catBadge(p.category)}</div><div class="tx" style="margin-left:18px"><b>${esc(p.custName)}</b><small>${esc(p.company)} · ${esc(p.policyNo)} · by ${esc(p.createdByName||"—")}</small></div><b>${inr(p.premium)}</b></div>`).join(""):`<div class="empty">No policies yet.</div>`}
+    </div>
+  </div>
+  <div class="g2e">${reportTable("Company-wise report","Company",groupReport(P,"company"))}${reportTable("RM-wise report","RM",groupReport(P,"rmName"))}</div>`;
+  el.onclick=e=>{
+    if(e.target.closest("[data-add]")) return openPolicy("add");
+    const lb=e.target.closest("[data-lob]"); if(lb) return setLob(lb.dataset.lob);
+    const sc=e.target.closest("[data-st]"); if(sc){ PT.status=sc.dataset.st; PT.page=1; return go("policies"); }
+    const r=e.target.closest("[data-id]"); if(r&&S.policies[r.dataset.id]) openPolicy("view",S.policies[r.dataset.id]);
+  };
+  drawCharts(P);
+}
+const PAL=["#2563EB","#F97316","#111111","#1E40AF","#FDBA74","#60A5FA","#9CA3AF","#EA580C","#93C5FD","#4B5563"];
+function drawCharts(P){
+  if(!window.Chart) return;
+  Object.values(S.charts).forEach(c=>c.destroy()); S.charts={};
+  const c1=$("#chMonth"), c2=$("#chCat"); if(!c1||!c2) return;
+  const now=new Date(), keys=[], labels=[];
+  for(let i=11;i>=0;i--){ const d=new Date(now.getFullYear(),now.getMonth()-i,1); keys.push(`${d.getFullYear()}-${pad(d.getMonth()+1)}`); labels.push(`${MON[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`); }
+  const series=fn=>{ const s=Object.fromEntries(keys.map(k=>[k,0])); P.forEach(p=>{ if(p.status==="Cancelled"||!fn(p)) return; const k=String(p.startDate||"").slice(0,7); if(k in s) s[k]+=num(p.premium); }); return keys.map(k=>s[k]); };
+  const all=S.lob==="All", font={family:"Inter"};
+  const cats=[...new Set([...S.settings.categories,...P.map(p=>p.category||"Unspecified")])];
+  const datasets = all
+    ? cats.map(c=>({label:c,data:series(p=>(p.category||"Unspecified")===c),backgroundColor:catColor(c),borderRadius:4,maxBarThickness:34,stack:"s"})).filter(d=>d.data.some(Boolean))
+    : [{label:S.lob,data:series(()=>true),backgroundColor:catColor(S.lob),borderRadius:8,maxBarThickness:34}];
+  S.charts.m=new Chart(c1,{type:"bar",data:{labels,datasets},
+    options:{maintainAspectRatio:false,animation:{duration:300},plugins:{legend:{display:all,position:"bottom",labels:{font,usePointStyle:true,padding:12}},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${inr(c.raw)}`}}},
+      scales:{y:{stacked:all,ticks:{font,callback:v=>v>=1e5?(v/1e5).toFixed(1)+"L":v>=1e3?(v/1e3)+"k":v},grid:{color:"#f0f1f5"}},x:{stacked:all,ticks:{font},grid:{display:false}}}}});
+  const g={}; P.forEach(p=>{ const c=(all?p.category:p.company)||"Unspecified"; g[c]=(g[c]||0)+1; });
+  let e=Object.entries(g).sort((a,b)=>b[1]-a[1]);
+  if(!all && e.length>8){ const rest=e.slice(7).reduce((a,x)=>a+x[1],0); e=[...e.slice(0,7),["Others",rest]]; }
+  S.charts.c=new Chart(c2,{type:"doughnut",data:{labels:e.map(x=>x[0]),datasets:[{data:e.map(x=>x[1]),backgroundColor:e.map((x,i)=>all?catColor(x[0]):PAL[i%PAL.length]),borderWidth:3,borderColor:"#fff"}]},
+    options:{maintainAspectRatio:false,cutout:"68%",animation:{duration:300},plugins:{legend:{position:"bottom",labels:{font,usePointStyle:true,padding:14}}}}});
+}
+
+/* ================================ POLICIES LIST ================================ */
+const PT={q:"",cat:"",comp:"",status:"",rm:"",sort:"createdAt",dir:-1,page:1,per:50};
+function policyRows(){
+  const q=PT.q.trim().toLowerCase();
+  let arr=lobPolicies().filter(p=>
+    (S.lob!=="All"||!PT.cat||p.category===PT.cat)&&(!PT.comp||p.company===PT.comp)&&(!PT.status||(PT.status==="__open"?!isClosed(p.status):PT.status==="__closed"?isClosed(p.status):p.status===PT.status))&&(!PT.rm||p.rmName===PT.rm)&&
+    (!q||[p.policyNo,p.custName,p.phone,p.vehNo,p.company,p.plan,p.rmName,p.email,p.kycNo,p.engineNo,p.chassisNo].some(v=>String(v||"").toLowerCase().includes(q))));
+  const k=PT.sort, d=PT.dir, numK=["premium","sumAssured","idv","createdAt"].includes(k);
+  arr.sort((a,b)=>{ let x=k==="renewalDate"?nextDue(a):a[k], y=k==="renewalDate"?nextDue(b):b[k];
+    if(numK) return (num(x)-num(y))*d; return String(x||"").localeCompare(String(y||""))*d; });
+  return arr;
+}
+/* Columns change with the tab: Type (All) · Vehicle + IDV (Motor) · Sum Assured / Insured (Life, Health, Other) */
+function polCols(){
+  const c=[["policyNo","Policy No"],["custName","Customer"],["company","Company"]];
+  if(S.lob==="All") c.push(["category","Type"]);
+  else if(isMotor(S.lob)) c.push(["vehNo","Vehicle"],["idv","IDV"]);
+  else c.push(["sumAssured",S.lob.toLowerCase()==="health"?"Sum Insured":"Sum Assured"]);
+  c.push(["premium","Premium"],["renewalDate","Next Due"],["status","Status"],["rmName","RM"]);
+  return c;
+}
+const R_COLS=["premium","sumAssured","idv"];
+function polCell(k,p){
+  switch(k){
+    case "policyNo": return `<td><b>${esc(p.policyNo)}</b></td>`;
+    case "custName": return `<td class="nm"><b>${esc(p.custName)}</b><small>${esc(p.phone||"")}</small></td>`;
+    case "company": return `<td class="nm"><b>${esc(p.company)}</b><small>${esc(p.plan||"")}</small></td>`;
+    case "category": return `<td>${catBadge(p.category)}</td>`;
+    case "vehNo": return `<td class="nm"><b>${esc(p.vehNo||"—")}</b><small>${esc([p.vehMake,p.vehModel,p.vehYear].filter(Boolean).join(" "))}</small></td>`;
+    case "idv": return `<td class="r">${p.idv?inr(p.idv):"—"}</td>`;
+    case "sumAssured": return `<td class="r">${p.sumAssured?inr(p.sumAssured):"—"}</td>`;
+    case "premium": return `<td class="r"><b>${inr(p.premium)}</b><br><small class="mu">${esc(p.frequency||"")}</small></td>`;
+    case "renewalDate": { const due=nextDue(p), dd=due?daysTo(due):null; return `<td>${fmtD(due)}${dd!==null&&dd<=30&&p.status==="Active"?"<br>"+dueBadge(dd):""}</td>`; }
+    case "status": return `<td>${statusBadge(p.status)}</td>`;
+    case "rmName": return `<td>${esc(p.rmName||"—")}</td>`;
+  }
+  return "<td></td>";
+}
+function renderPolicies(){
+  const el=$("#pg-policies");
+  if(!S.shell.policies){
+    const opt=(arr,v)=>arr.map(o=>`<option ${o===v?"selected":""}>${esc(o)}</option>`).join("");
+    const cols=polCols();
+    el.innerHTML=`
+    <div class="ph"><div><h2>${esc(lobTitle("Policies"))}</h2><p>${can("canViewAllPolicies")?"All policy records":"Policies created by you"}${S.lob!=="All"?` · ${esc(S.lob)} only`:""}</p></div>
+      <div class="ph-a">${can("canDownloadExcel")?`<button class="btn" id="pExp">${I("download")}Export</button>`:""}${can("canAddPolicy")?`<button class="btn o" id="pAdd">${I("plus")}Add ${S.lob==="All"?"":esc(S.lob)+" "}Policy</button>`:""}</div></div>
+    <div class="card p0">
+      <div class="tbar">
+        <div class="srch">${I("search")}<input class="in" id="pQ" placeholder="Search policy no, customer, phone, ${isMotor(S.lob)?"vehicle, engine, chassis":"vehicle"}…" value="${esc(PT.q)}"></div>
+        ${S.lob==="All"?`<select class="in" id="pCat"><option value="">All types</option>${opt(S.settings.categories,PT.cat)}</select>`:""}
+        <select class="in" id="pComp"><option value="">All companies</option>${opt(S.settings.companies.map(c=>c.name),PT.comp)}</select>
+        <select class="in" id="pSt"><option value="">All status</option><option value="__open" ${PT.status==="__open"?"selected":""}>In force (not closed)</option><option value="__closed" ${PT.status==="__closed"?"selected":""}>Closed (all)</option>${opt(S.settings.statuses,PT.status)}</select>
+        <select class="in" id="pRm"><option value="">All RMs</option>${opt(S.settings.rms.map(r=>r.name),PT.rm)}</select>
+        <button class="btn g sm" id="pClr">Clear</button>
+      </div>
+      <div class="tw"><table class="tbl"><thead><tr>${cols.map(([k,l])=>`<th class="s ${PT.sort===k?"on":""} ${R_COLS.includes(k)?"r":""}" data-s="${k}">${l}${PT.sort===k?(PT.dir>0?" ↑":" ↓"):""}</th>`).join("")}<th class="r">Actions</th></tr></thead><tbody id="pBody"></tbody></table></div>
+      <div class="pager" id="pPager"></div>
+    </div>`;
+    const upd=debounce(()=>{ PT.page=1; renderPoliciesBody(); },180);
+    $("#pQ").oninput=e=>{ PT.q=e.target.value; upd(); };
+    [["pCat","cat"],["pComp","comp"],["pSt","status"],["pRm","rm"]].forEach(([id,k])=>{ const x=$("#"+id); if(x) x.onchange=e=>{ PT[k]=e.target.value; PT.page=1; renderPoliciesBody(); }; });
+    $("#pClr").onclick=()=>{ Object.assign(PT,{q:"",cat:"",comp:"",status:"",rm:"",page:1}); S.shell.policies=false; renderPolicies(); };
+    $("#pAdd")&&($("#pAdd").onclick=()=>openPolicy("add"));
+    $("#pExp")&&($("#pExp").onclick=()=>exportPolicies(policyRows(),lobFile("Policies")));
+    el.querySelector("thead").onclick=e=>{ const th=e.target.closest("[data-s]"); if(!th) return; const k=th.dataset.s; PT.dir=PT.sort===k?-PT.dir:1; PT.sort=k; S.shell.policies=false; renderPolicies(); };
+    el.querySelector("#pBody").onclick=e=>{
+      const b=e.target.closest("[data-act]"), tr=e.target.closest("tr[data-id]"); if(!tr) return; const p=S.policies[tr.dataset.id]; if(!p) return;
+      const a=b?.dataset.act||"view";
+      if(a==="view") openPolicy("view",p); if(a==="edit") openPolicy("edit",p); if(a==="renew") openPolicy("renew",p); if(a==="del") deletePolicy(p); if(a==="status") openStatusModal(p);
+    };
+    $("#pPager").onclick=e=>{ const b=e.target.closest("[data-pg]"); if(!b) return; PT.page+=b.dataset.pg==="next"?1:-1; renderPoliciesBody(); el.querySelector(".tw").scrollTop=0; };
+    S.shell.policies=true;
+  }
+  renderPoliciesBody();
+}
+function renderPoliciesBody(){
+  const cols=polCols(), rows=policyRows(), n=rows.length, pages=Math.max(1,Math.ceil(n/PT.per)); PT.page=Math.min(Math.max(1,PT.page),pages);
+  const slice=rows.slice((PT.page-1)*PT.per,PT.page*PT.per);
+  const ce=can("canEditPolicy"), cd=can("canDeletePolicy"), cr=can("canAddPolicy")&&ce;
+  $("#pBody").innerHTML = slice.length ? slice.map(p=>`<tr class="ck" data-id="${p.id}">${cols.map(([k])=>polCell(k,p)).join("")}
+      <td><div class="acts">
+        <button class="btn g ic" data-act="view" title="View">${I("eye")}</button>
+        ${ce?`<button class="btn g ic" data-act="edit" title="Edit">${I("edit")}</button>`:""}
+        ${cr&&!isClosed(p.status)?`<button class="btn g ic" data-act="renew" title="Renew">${I("renew")}</button>`:""}
+        ${ce?`<button class="btn g ic" data-act="status" title="Change status / close">${I("flag")}</button>`:""}
+        ${cd?`<button class="btn g ic d" data-act="del" title="Delete">${I("trash")}</button>`:""}
+      </div></td></tr>`).join("") : emptyRow(cols.length+1, S.synced.policies||Object.keys(S.policies).length?"No policies match your filters.":"Loading policies…");
+  $("#pPager").innerHTML=`<span>${n?`Showing ${((PT.page-1)*PT.per+1).toLocaleString("en-IN")}–${Math.min(PT.page*PT.per,n).toLocaleString("en-IN")} of ${n.toLocaleString("en-IN")}`:"0 records"}</span>
+    <div><button class="btn sm" data-pg="prev" ${PT.page<=1?"disabled":""}>‹ Prev</button><span>Page ${PT.page} / ${pages}</span><button class="btn sm" data-pg="next" ${PT.page>=pages?"disabled":""}>Next ›</button></div>`;
+}
+async function deletePolicy(p){
+  if(!can("canDeletePolicy")) return;
+  if(!(await confirmBox(`Delete policy ${p.policyNo} of ${p.custName}? It will be removed for all users.`,"Delete",true))) return;
+  try{
+    await updateDoc(doc(db,"policies",p.id),{deleted:true,updatedAt:serverTimestamp(),updatedBy:S.user.uid});
+    updateDoc(doc(db,"income",p.id),{deleted:true,updatedAt:serverTimestamp()}).catch(()=>{});
+    logAct("policy.delete",p.policyNo,p.custName); toast("Policy deleted.","ok");
+  }catch(e){ toast("Delete failed: "+e.code,"er"); }
+}
+
+/* ================================ POLICY MODAL ================================ */
+const draftKey = id => `ib_draft:${S.user?.uid}:${id}`;
+let M=null; // current modal state
+function fieldHTML(f,v,ro){
+  const id="pf_"+f.k, lock=ro||f.ro, req=f.req?'<span class="req">*</span>':"";
+  v = v ?? "";
+  let ctl;
+  if(f.t==="select"){
+    const opts=(f.o?f.o():[]).slice(); if(v!=="" && !opts.includes(v)) opts.unshift(v);
+    ctl=`<select class="in" id="${id}" name="${f.k}" ${lock?"disabled":""}><option value="">Select…</option>${opts.map(o=>`<option ${o===v?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  } else if(f.t==="list") ctl=`<input class="in" id="${id}" name="${f.k}" list="dl_${f.k}" value="${esc(v)}" ${lock?"readonly":""} autocomplete="off"><datalist id="dl_${f.k}"></datalist>`;
+  else if(f.t==="area") ctl=`<textarea class="in" id="${id}" name="${f.k}" ${lock?"readonly":""}>${esc(v)}</textarea>`;
+  else ctl=`<input class="in" id="${id}" name="${f.k}" type="${f.t||"text"}" ${f.t==="number"?'step="any"':""} value="${esc(v)}" ${lock?"readonly":""}>`;
+  return `<label class="f ${f.w?"w2":""}" data-k="${f.k}">${esc(f.l)} ${req}${ctl}</label>`;
+}
+function openPolicy(mode,p={}){
+  if(mode==="add"&&!can("canAddPolicy")) return; if(mode==="edit"&&!can("canEditPolicy")) return;
+  const ro=mode==="view";
+  const fin=p.id?(S.income[p.id]||{}):{};
+  let data={...p,...fin};
+  if(mode==="add") data={status:"Active",frequency:"Yearly",category:S.lob!=="All"?S.lob:(S.settings.categories[0]||""),startDate:today(),premiumCollected:""};
+  if(mode==="renew"){
+    const start=nextDue(p)||p.endDate||today();
+    data={...p,...fin,startDate:start,endDate:isMotor(p.category)||String(p.category).toLowerCase()==="health"?addMonths(start,12):p.endDate,status:"Active",payRef:"",payMethod:"",premiumCollected:p.premium,remindedFor:"",docs:[]};
+    delete data.id;
+  }
+  const dk = mode==="edit"?draftKey(p.id):mode==="add"?draftKey("new"):null;
+  let restored=false;
+  if(dk){ try{ const dr=JSON.parse(localStorage.getItem(dk)||"null"); if(dr){ data={...data,...dr}; restored=true; } }catch{} }
+  M={mode,p,dk,dirty:false,docs:mode==="renew"?[]:[...(p.docs||[])],removed:[],pending:[],commManual:!!data.commission};
+  const secs=SECTIONS.filter(([k])=>k!=="fin"||finAny());
+  const body=`
+    ${!ro?`<div class="ocrbar">${I("scan")}<div><b>AI OCR Auto-fill</b><br><span class="mu">Upload a policy copy (photo or PDF) — fields fill automatically. Verify before saving.</span></div><div class="sp"></div><button class="btn o sm" type="button" id="ocrBtn">${I("scan")}OCR Scan</button></div>`:""}
+    <div class="stabs">${secs.map(([k,t])=>`<button type="button" data-jump="${k}" class="${k==="motor"?"js-motor":""}">${t}</button>`).join("")}</div>
+    <form id="polForm" autocomplete="off">
+    ${secs.map(([k,t])=>`<div class="sec ${k==="motor"?"js-motor":""}" id="sec_${k}"><h4>${t}</h4>${k==="docs"?`<div class="dgrid">${DOC_TYPES.map(dt=>`<div class="dslot" data-type="${dt}"><div class="dslot-h"><b>${dt}</b>${ro?"":`<button type="button" class="btn sm" data-docadd="${dt}">${I("clip")}Attach</button>`}</div><div class="dlist"></div></div>`).join("")}</div>`
+      :`<div class="fg">${F.filter(f=>f.s===k&&fAllowed(f)).map(f=>fieldHTML(f,data[f.k],ro)).join("")}</div>`}</div>`).join("")}
+    ${ro&&p.id?policyExtras(p):""}
+    ${ro&&p.id?`<div class="note">Created by <b>${esc(p.createdByName||"—")}</b> on ${fmtTs(p.createdAt)} · Last updated ${fmtTs(p.updatedAt)}${p.remindedFor?` · Reminded for ${fmtD(p.remindedFor)}`:""}${p.renewOf?" · Renewal of an earlier policy":""}</div>`:""}
+    </form>`;
+  const title = mode==="add"?"Add Policy":mode==="edit"?`Edit Policy · ${esc(p.policyNo)}`:mode==="renew"?`Renew Policy · ${esc(p.policyNo)}`:`Policy · ${esc(p.policyNo)}`;
+  const footer = ro
+    ? `<span class="sp"></span>${can("canManageClaims")&&p.id?`<button class="btn" data-m="claim">${I("claim")}Claim</button>`:""}${can("canEditPolicy")&&p.id?`<button class="btn" data-m="status">${I("flag")}Status</button>`:""}${can("canEditPolicy")?`<button class="btn" data-m="edit">${I("edit")}Edit</button>`:""}${can("canAddPolicy")&&can("canEditPolicy")&&!isClosed(p.status)?`<button class="btn" data-m="renew">${I("renew")}Renew</button>`:""}<button class="btn p" data-m="close">Close</button>`
+    : `<span class="mu" id="saveState" style="font-size:12px">${restored?"Draft restored":"Auto-saving draft"}</span><span class="sp"></span><button class="btn" data-m="cancel">Cancel</button><button class="btn p" data-m="save" id="saveBtn">${I("check")}${mode==="renew"?"Save Renewal":"Save Policy"}</button>`;
+  const m=openModal({title,body,footer,wide:true,onClose:async()=>{
+    if(ro||!M?.dirty) return true;
+    const ok=await confirmBox("Discard unsaved changes? (Your draft will be deleted.)","Discard",true);
+    if(ok&&M.dk) localStorage.removeItem(M.dk); return ok; }});
+  M.el=m;
+  if(ro) m.querySelector(".md-b").addEventListener("click",e=>{ const r=e.target.closest("[data-claim]"); if(r&&S.claims[r.dataset.claim]){ m._close(true); openClaim(S.claims[r.dataset.claim]); } });
+  const form=$("#polForm",m);
+  m.querySelector(".md-f").onclick=async e=>{ const a=e.target.closest("[data-m]")?.dataset.m; if(!a) return;
+    if(a==="close") m._close(true);
+    if(a==="cancel") m._close();
+    if(a==="save") savePolicy();
+    if(a==="status"){ m._close(true); openStatusModal(p); }
+    if(a==="claim"){ m._close(true); openClaim(null,p); }
+    if(a==="edit"||a==="renew"){ m._close(true); openPolicy(a,p); } };
+  $$("[data-jump]",m).forEach(b=>b.onclick=()=>$("#sec_"+b.dataset.jump,m).scrollIntoView({behavior:"smooth",block:"start"}));
+  const toggleMotor=()=>$$(".js-motor",m).forEach(x=>x.classList.toggle("hidden",!isMotor(val("category"))));
+  toggleMotor(); fillPlans(); renderDocLists();
+  if(!ro){
+    const saveDraft=debounce(()=>{ if(!M?.dk) return; try{ localStorage.setItem(M.dk,JSON.stringify(collect())); $("#saveState",m)&&($("#saveState",m).textContent="Draft saved "+new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})); }catch{} },400);
+    form.addEventListener("input",e=>{ M.dirty=true; if(e.target.name==="commission") M.commManual=!!e.target.value; recalc(e.target.name); saveDraft(); });
+    form.addEventListener("change",e=>{ const n=e.target.name; M.dirty=true;
+      if(n==="category"){ toggleMotor(); fillPlans(); } if(n==="company") fillPlans();
+      if(n==="rmName"){ const r=S.settings.rms.find(x=>x.name===e.target.value); if(r){ setVal("rmCode",r.code||""); setVal("branch",r.branch||""); if(r.commPct!==""&&r.commPct!=null) setVal("commPct",r.commPct); } }
+      recalc(n); saveDraft(); });
+    recalc("init");
+    $("#ocrBtn",m).onclick=()=>{ const inp=$("#ocrInput"); inp.value=""; inp.onchange=()=>inp.files[0]&&doOCR(inp.files[0]); inp.click(); };
+  }
+  m.querySelector(".dgrid").onclick=e=>{
+    const add=e.target.closest("[data-docadd]");
+    if(add){ const inp=$("#docInput"); inp.value=""; inp.onchange=()=>{ [...inp.files].forEach(f=>M.pending.push({type:add.dataset.docadd,file:f})); M.dirty=true; renderDocLists(); }; inp.click(); return; }
+    const op=e.target.closest("[data-open]"); if(op){ e.preventDefault(); const [kind,i]=op.dataset.open.split(":"); kind==="p"?window.open(URL.createObjectURL(M.pending[+i].file),"_blank"):openDoc(M.docs[+i]); return; }
+    const rm=e.target.closest("[data-rmdoc]"); if(rm){ const [kind,i]=rm.dataset.rmdoc.split(":"); if(kind==="p") M.pending.splice(+i,1); else M.removed.push(M.docs[+i]); M.dirty=true; renderDocLists(); }
+  };
+}
+const val = k => { const e=$("#pf_"+k); return e?e.value:""; };
+function setVal(k,v,mark){
+  const e=$("#pf_"+k); if(!e) return;
+  if(e.tagName==="SELECT" && v!=="" && ![...e.options].some(o=>o.value===String(v))){ const o=document.createElement("option"); o.textContent=v; e.appendChild(o); }
+  e.value=v??""; if(mark) e.classList.add("filled");
+}
+function fillPlans(){
+  const dl=$("#dl_plan"); if(!dl) return; const c=val("company"), cat=val("category");
+  dl.innerHTML=S.settings.plans.filter(p=>(!c||p.company===c)&&(!cat||p.category===cat)).map(p=>`<option value="${esc(p.name)}">`).join("");
+}
+function recalc(src){
+  if(["startDate","endDate","frequency","init"].includes(src)) setVal("renewalDate",nextDue({startDate:val("startDate"),endDate:val("endDate"),frequency:val("frequency")}));
+  if(src==="dob"||src==="init") setVal("age",calcAge(val("dob")));
+  if(!$("#pf_netIncome")&&!$("#pf_commission")) return;
+  if((src==="premium"||src==="commPct") && !M.commManual && $("#pf_commission") && val("commPct")!=="") setVal("commission",Math.round(num(val("premium"))*num(val("commPct"))/100));
+  if(src==="premium" && $("#pf_premiumCollected") && !$("#pf_premiumCollected").dataset.touched) setVal("premiumCollected",val("premium"));
+  if(src==="premiumCollected") $("#pf_premiumCollected").dataset.touched=1;
+  const payout = $("#pf_payoutRM") ? num(val("payoutRM")) : num(S.income[M?.p?.id]?.payoutRM);
+  if($("#pf_netIncome")) setVal("netIncome",num(val("commission"))+num(val("brokerage"))-payout);
+}
+function collect(){
+  const o={};
+  $$("#polForm [name]").forEach(e=>{ const f=FK[e.name]; if(!f) return; o[e.name]= f.t==="number" ? (e.value===""?"":num(e.value)) : e.value.trim(); });
+  return o;
+}
+function renderDocLists(){
+  if(!M?.el) return; const ro=M.mode==="view";
+  $$(".dslot",M.el).forEach(sl=>{ const t=sl.dataset.type;
+    const ex=M.docs.map((d,i)=>[d,i]).filter(([d])=>d.type===t&&!M.removed.includes(d)).map(([d,i])=>`<span class="chip"><a data-open="d:${i}" title="${esc(d.name)}">${esc(d.name)}</a>${ro?"":`<button type="button" data-rmdoc="d:${i}">×</button>`}</span>`);
+    const pe=M.pending.map((d,i)=>[d,i]).filter(([d])=>d.type===t).map(([d,i])=>`<span class="chip"><a data-open="p:${i}">${esc(d.file.name)}</a><em>pending</em><button type="button" data-rmdoc="p:${i}">×</button></span>`);
+    sl.querySelector(".dlist").innerHTML=[...ex,...pe].join("")||`<span class="mu" style="font-size:12px">No file</span>`;
+  });
+}
+async function openDoc(d){
+  const w=window.open("","_blank");
+  try{
+    if(d.url){ w.location=d.url; return; }
+    if(d.fileId){ const s=await getDoc(doc(db,"policyFiles",d.fileId)); if(!s.exists()){ w.close(); return toast("File not found.","er"); }
+      const blob=await (await fetch(s.data().data)).blob(); w.location=URL.createObjectURL(blob); }
+  }catch(e){ w.close(); toast("Could not open file: "+e.message,"er"); }
+}
+async function uploadFile(policyId,type,file){
+  if(storage && STORAGE_MODE!=="firestore"){
+    try{ const path=`policies/${policyId}/${Date.now()}_${file.name.replace(/[^\w.\-]/g,"_")}`; const r=sref(storage,path);
+      await uploadBytes(r,file,{contentType:file.type}); return {type,name:file.name,url:await getDownloadURL(r),path,size:file.size}; }
+    catch(e){ if(STORAGE_MODE==="storage") throw e; console.warn("Storage upload failed, using Firestore fallback",e); }
+  }
+  let f=file; if(f.type.startsWith("image/")) f=await compressImage(f,1600,.7);
+  if(f.size>700*1024) throw new Error(`${file.name} is ${Math.round(f.size/1024)} KB — max 700 KB without Firebase Storage.`);
+  const data=await fileToDataURL(f);
+  const r=await addDoc(collection(db,"policyFiles"),{policyId,type,name:file.name,mime:f.type,data,createdBy:S.user.uid,createdAt:serverTimestamp()});
+  return {type,name:file.name,fileId:r.id,size:f.size};
+}
+async function savePolicy(){
+  const m=M.el, d=collect();
+  $$(".in.bad",m).forEach(e=>e.classList.remove("bad"));
+  const miss=F.filter(f=>f.req&&fAllowed(f)&&(d[f.k]===""||d[f.k]==null));
+  if(miss.length){ miss.forEach(f=>$("#pf_"+f.k,m)?.classList.add("bad")); $("#pf_"+miss[0].k,m)?.scrollIntoView({behavior:"smooth",block:"center"}); return toast("Please fill: "+miss.map(f=>f.l).join(", "),"er"); }
+  if(d.endDate && d.startDate && d.endDate<d.startDate) return toast("End date cannot be before start date.","er");
+  const isNew=M.mode!=="edit";
+  if(M.mode==="add"){ const dup=Object.values(S.policies).find(x=>String(x.policyNo).toLowerCase()===String(d.policyNo).toLowerCase());
+    if(dup && !(await confirmBox(`Policy number ${d.policyNo} already exists (${dup.custName}). Save anyway?`,"Save anyway"))) return; }
+  const btn=$("#saveBtn",m); btn.disabled=true; btn.innerHTML='<div class="spin"></div> Saving…';
+  try{
+    const ref=isNew?doc(collection(db,"policies")):doc(db,"policies",M.p.id);
+    const uploaded=[]; for(const pd of M.pending) uploaded.push(await uploadFile(ref.id,pd.type,pd.file));
+    const pol={}; F.filter(f=>f.s!=="fin").forEach(f=>{ if(d[f.k]!==undefined) pol[f.k]=d[f.k]; });
+    if(!isMotor(pol.category)) F.filter(f=>f.s==="motor").forEach(f=>pol[f.k]="");
+    pol.renewalDate=nextDue(pol); pol.age=calcAge(pol.dob);
+    pol.docs=[...M.docs.filter(x=>!M.removed.includes(x)),...uploaded];
+    pol.deleted=false; pol.updatedAt=serverTimestamp(); pol.updatedBy=S.user.uid;
+    if(isNew){ Object.assign(pol,{createdBy:S.user.uid,createdByName:S.profile.name||S.user.email,createdAt:serverTimestamp(),remindedFor:""}); if(M.mode==="renew") pol.renewOf=M.p.id; }
+    const b=writeBatch(db);
+    b.set(ref,pol,{merge:true});
+    if(finAny()){
+      const fin={}; F.filter(f=>f.s==="fin"&&fAllowed(f)&&!f.ro).forEach(f=>fin[f.k]=d[f.k]??"");
+      const prev=S.income[M.p?.id]||{};
+      const payout=can("canViewPayout")?num(fin.payoutRM):num(prev.payoutRM);
+      const comm=can("canViewIncome")?num(fin.commission)+num(fin.brokerage):num(prev.commission)+num(prev.brokerage);
+      fin.netIncome=comm-payout;
+      b.set(doc(db,"income",ref.id),{...fin,policyId:ref.id,policyNo:pol.policyNo,company:pol.company,category:pol.category,rmName:pol.rmName||"",custName:pol.custName,date:pol.startDate,
+        createdBy:isNew?S.user.uid:(M.p.createdBy||S.user.uid),deleted:false,updatedAt:serverTimestamp()},{merge:true});
+    }
+    if(M.mode==="renew" && can("canEditPolicy")) b.update(doc(db,"policies",M.p.id),{status:"Renewed",renewedTo:ref.id,updatedAt:serverTimestamp(),updatedBy:S.user.uid});
+    await b.commit();
+    for(const r of M.removed){ try{ if(r.path&&storage) await deleteObject(sref(storage,r.path)); if(r.fileId) await deleteDoc(doc(db,"policyFiles",r.fileId)); }catch{} }
+    logAct(`policy.${M.mode==="edit"?"edit":M.mode==="renew"?"renew":"add"}`,pol.policyNo,pol.custName);
+    if(M.dk) localStorage.removeItem(M.dk);
+    toast(M.mode==="edit"?"Policy updated.":M.mode==="renew"?"Renewal saved.":"Policy added.","ok");
+    M.dirty=false; m._close(true);
+  }catch(e){ console.error(e); toast("Save failed: "+(e.code||e.message),"er"); btn.disabled=false; btn.innerHTML=`${I("check")}Save Policy`; }
+}
+
+/* ================================ OCR / AI ================================ */
+function ocrPrompt(){
+  const keys=F.filter(f=>f.s!=="fin"&&!f.ro).map(f=>`${f.k} (${f.l})`).join(", ");
+  return `You extract data from Indian insurance policy documents. Return ONLY a JSON object with these keys when found: ${keys}.
+Rules: dates as YYYY-MM-DD; numbers without commas or currency; category must be one of [${S.settings.categories.join(", ")}];
+frequency one of [${S.settings.frequencies.join(", ")}]; gender one of [${S.settings.genders.join(", ")}];
+company = insurer's name; custName = policy holder / insured / proposer; premium = total premium payable incl. GST;
+sumAssured = sum assured / sum insured; for motor fill vehNo, vehMake, vehModel, vehYear, engineNo, chassisNo, idv.
+Omit keys you cannot find. Do not guess.`;
+}
+/**
+ * runOCR(file) → returns { policyNo, company, custName, premium, ... }
+ * 1) proxyUrl  : your Cloud Function (recommended, key hidden)
+ * 2) openai    : GPT-4o vision directly   — PASTE KEY in OCR_CONFIG.openaiKey
+ * 3) google    : Cloud Vision TEXT_DETECTION + regex parser — PASTE KEY in OCR_CONFIG.googleVisionKey
+ * (Mindee / Azure Document Intelligence: add another branch here returning the same object shape.)
+ */
+async function runOCR(file){
+  let f=file; if(f.type.startsWith("image/")) f=await compressImage(f,2000,.85);
+  const dataUrl=await fileToDataURL(f);
+  if(OCR_CONFIG.proxyUrl){
+    const idToken=await auth.currentUser.getIdToken();
+    const payload=JSON.stringify({file:dataUrl,name:f.name,mime:f.type,prompt:ocrPrompt(),idToken});
+    const gas=/script\.google(usercontent)?\.com/.test(OCR_CONFIG.proxyUrl);
+    // Apps Script: plain-text body (no custom headers) avoids the CORS preflight Apps Script can't answer
+    const r=await fetch(OCR_CONFIG.proxyUrl, gas ? {method:"POST",body:payload}
+      : {method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+idToken},body:payload});
+    if(!r.ok) throw new Error("OCR proxy error "+r.status);
+    const j=await r.json(); if(j && j.error) throw new Error("OCR: "+j.error); return j;
+  }
+  if(OCR_CONFIG.provider==="openai" && OCR_CONFIG.openaiKey){
+    const part=f.type==="application/pdf"?{type:"file",file:{filename:f.name,file_data:dataUrl}}:{type:"image_url",image_url:{url:dataUrl}};
+    const r=await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+OCR_CONFIG.openaiKey},
+      body:JSON.stringify({model:OCR_CONFIG.openaiModel,temperature:0,response_format:{type:"json_object"},messages:[{role:"system",content:ocrPrompt()},{role:"user",content:[{type:"text",text:"Extract the policy fields from this document."},part]}]})});
+    const j=await r.json(); if(!r.ok) throw new Error(j.error?.message||("OpenAI error "+r.status));
+    return JSON.parse(j.choices[0].message.content);
+  }
+  if(OCR_CONFIG.provider==="google" && OCR_CONFIG.googleVisionKey){
+    if(f.type==="application/pdf") throw new Error("Google Vision images:annotate needs an image. Upload a photo/screenshot, or use OpenAI/proxy for PDFs.");
+    const r=await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${OCR_CONFIG.googleVisionKey}`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({requests:[{image:{content:dataUrl.split(",")[1]},features:[{type:"DOCUMENT_TEXT_DETECTION"}]}]})});
+    const j=await r.json(); if(!r.ok) throw new Error(j.error?.message||"Vision error");
+    return parseOCRText(j.responses?.[0]?.fullTextAnnotation?.text||"");
+  }
+  throw new Error("OCR is not configured. Add a proxyUrl or API key in OCR_CONFIG (top of the script).");
+}
+/* Heuristic parser for raw OCR text (Indian policy formats) */
+function parseOCRText(t){
+  const o={}, g=(re)=>{ const m=t.match(re); return m?m[1].trim():""; };
+  o.policyNo=g(/policy\s*(?:no|number|#)\.?\s*[:\-]?\s*([A-Z0-9\/\-]{5,})/i);
+  o.premium=g(/(?:total|gross|final)?\s*premium(?:\s*payable|\s*amount)?[^\d\n]{0,25}([\d,]+(?:\.\d+)?)/i);
+  o.sumAssured=g(/sum\s*(?:assured|insured)[^\d\n]{0,25}([\d,]+)/i);
+  o.idv=g(/\bIDV\b[^\d\n]{0,25}([\d,]+)/i);
+  const dt="(\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}|\\d{1,2}[\\s\\-][A-Za-z]{3,9}[\\s\\-,]+\\d{4})";
+  o.startDate=g(new RegExp(`(?:start|commencement|inception|from|effective)[^\\d\\n]{0,30}${dt}`,"i"));
+  o.endDate=g(new RegExp(`(?:expiry|end|maturity|valid\\s*till|to)\\s*(?:date)?[^\\d\\n]{0,20}${dt}`,"i"));
+  o.dob=g(new RegExp(`(?:date\\s*of\\s*birth|dob)[^\\d\\n]{0,15}${dt}`,"i"));
+  o.custName=g(/(?:insured|proposer|policy\s*holder|customer)(?:'s)?\s*name\s*[:\-]?\s*([A-Za-z .]{3,60})/i);
+  o.nomineeName=g(/nominee(?:'s)?\s*name\s*[:\-]?\s*([A-Za-z .]{3,60})/i);
+  o.email=g(/([\w.+-]+@[\w-]+\.[\w.]+)/);
+  o.phone=g(/(?:\+91[\s\-]?)?\b([6-9]\d{9})\b/);
+  o.vehNo=g(/\b([A-Z]{2}[\s\-]?\d{1,2}[\s\-]?[A-Z]{0,3}[\s\-]?\d{4})\b/);
+  o.engineNo=g(/engine\s*(?:no|number)\.?\s*[:\-]?\s*([A-Z0-9]{6,})/i);
+  o.chassisNo=g(/chassis\s*(?:no|number)\.?\s*[:\-]?\s*([A-Z0-9]{8,})/i);
+  const pan=g(/\b([A-Z]{5}\d{4}[A-Z])\b/); if(pan){ o.kycType="PAN"; o.kycNo=pan; }
+  const co=S.settings.companies.find(c=>t.toLowerCase().includes(c.name.toLowerCase().split(" ")[0])); if(co) o.company=co.name;
+  o.category= o.vehNo||/motor|vehicle|private car|two wheeler/i.test(t)?"Motor": /health|mediclaim|hospital/i.test(t)?"Health": /life|assured|maturity/i.test(t)?"Life":"";
+  return o;
+}
+async function doOCR(file){
+  const btn=$("#ocrBtn"); const old=btn.innerHTML; btn.disabled=true; btn.innerHTML='<div class="spin"></div> Reading…';
+  try{
+    const raw=await runOCR(file); let n=0;
+    for(const [k,v0] of Object.entries(raw||{})){
+      const f=FK[k]; if(!f||f.ro||f.s==="fin"||v0==null||v0==="") continue;
+      let v=v0;
+      if(f.t==="date"){ v=parseDate(v); if(!v) continue; }
+      if(f.t==="number") v=num(v);
+      if(k==="company"){ const c=S.settings.companies.find(c=>c.name.toLowerCase()===String(v).toLowerCase()||String(v).toLowerCase().includes(c.name.toLowerCase())||c.name.toLowerCase().includes(String(v).toLowerCase())); if(c) v=c.name; }
+      if(f.t==="select"){ const o=(f.o?.()||[]).find(x=>x.toLowerCase()===String(v).toLowerCase()); if(o) v=o; }
+      setVal(k,v,true); n++;
+    }
+    $$(".js-motor",M.el).forEach(x=>x.classList.toggle("hidden",!isMotor(val("category"))));
+    fillPlans(); recalc("init"); recalc("premium"); M.dirty=true;
+    M.pending.push({type:"Policy PDF",file}); renderDocLists();
+    toast(n?`OCR filled ${n} fields — highlighted in orange. Please verify.`:"OCR finished but found no fields.","ok");
+    logAct("ocr.scan",file.name,`${n} fields`);
+  }catch(e){ console.error(e); toast(e.message,"er"); }
+  finally{ btn.disabled=false; btn.innerHTML=old; }
+}
+
+/* ================================ INCOME & PAYOUT ================================ */
+const IT={from:"",to:"",comp:"",rm:"",cat:"",q:"",page:1,per:50};
+function incomeRows(){
+  const q=IT.q.toLowerCase();
+  return Object.values(S.income).filter(x=>inLob(x.category)&&(!IT.from||x.date>=IT.from)&&(!IT.to||x.date<=IT.to)&&(!IT.comp||x.company===IT.comp)&&(!IT.rm||x.rmName===IT.rm)&&(!IT.cat||x.category===IT.cat)&&
+    (!q||[x.policyNo,x.custName,x.payRef].some(v=>String(v||"").toLowerCase().includes(q)))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+}
+function renderIncome(){
+  const el=$("#pg-income"); if(!finAny()) return;
+  const ci=can("canViewIncome"), cp=can("canViewPayout");
+  if(!S.shell.income){
+    const opt=(arr,v)=>arr.map(o=>`<option ${o===v?"selected":""}>${esc(o)}</option>`).join("");
+    const fy=new Date().getMonth()>=3?new Date().getFullYear():new Date().getFullYear()-1;
+    el.innerHTML=`
+    <div class="ph"><div><h2>${esc(lobTitle("Income & Payout"))}</h2><p>Commission, brokerage and RM payouts from every policy</p></div>
+      <div class="ph-a"><button class="btn sm" data-q="month">This month</button><button class="btn sm" data-q="fy">FY ${fy}-${String(fy+1).slice(2)}</button><button class="btn sm" data-q="all">All time</button>${can("canDownloadExcel")?`<button class="btn" id="iExp">${I("download")}Export</button>`:""}</div></div>
+    <div class="stats" id="iStats"></div>
+    <div class="card p0" style="margin-bottom:18px">
+      <div class="tbar">
+        <div class="srch">${I("search")}<input class="in" id="iQ" placeholder="Search policy, customer, txn ref…" value="${esc(IT.q)}"></div>
+        <input class="in" type="date" id="iFrom" value="${IT.from}" title="From"><input class="in" type="date" id="iTo" value="${IT.to}" title="To">
+        <select class="in" id="iComp"><option value="">All companies</option>${opt(S.settings.companies.map(c=>c.name),IT.comp)}</select>
+        <select class="in" id="iRm"><option value="">All RMs</option>${opt(S.settings.rms.map(r=>r.name),IT.rm)}</select>
+        ${S.lob==="All"?`<select class="in" id="iCat"><option value="">All types</option>${opt(S.settings.categories,IT.cat)}</select>`:""}
+      </div>
+      <div class="tw"><table class="tbl"><thead><tr><th>Date</th><th>Policy No</th><th>Customer</th><th>Company</th><th>RM</th>
+        ${ci?'<th class="r">Premium Coll.</th><th class="r">Commission</th><th class="r">Brokerage</th>':""}${cp?'<th class="r">Payout</th>':""}${ci?'<th class="r">Net</th>':""}<th>Mode</th><th>Ref</th></tr></thead><tbody id="iBody"></tbody></table></div>
+      <div class="pager" id="iPager"></div>
+    </div>
+    <div class="card p0"><div class="tbar"><h3>RM-wise summary</h3></div><div class="tw"><table class="tbl"><thead><tr><th>RM</th><th class="r">Policies</th>${ci?'<th class="r">Premium</th><th class="r">Commission + Brokerage</th>':""}${cp?'<th class="r">Payout</th>':""}${ci?'<th class="r">Net</th>':""}</tr></thead><tbody id="iRmBody"></tbody></table></div></div>`;
+    const upd=()=>{ IT.page=1; renderIncomeBody(); };
+    $("#iQ").oninput=debounce(e=>{ IT.q=e.target.value; upd(); },180);
+    [["iFrom","from"],["iTo","to"],["iComp","comp"],["iRm","rm"],["iCat","cat"]].forEach(([id,k])=>{ const x=$("#"+id); if(x) x.onchange=e=>{ IT[k]=e.target.value; upd(); }; });
+    el.querySelector(".ph-a").onclick=e=>{ const q=e.target.closest("[data-q]")?.dataset.q; if(!q) return; const d=new Date();
+      if(q==="month"){ IT.from=ymd(new Date(d.getFullYear(),d.getMonth(),1)); IT.to=ymd(new Date(d.getFullYear(),d.getMonth()+1,0)); }
+      if(q==="fy"){ IT.from=`${fy}-04-01`; IT.to=`${fy+1}-03-31`; } if(q==="all"){ IT.from=""; IT.to=""; }
+      $("#iFrom").value=IT.from; $("#iTo").value=IT.to; upd(); };
+    $("#iExp")&&($("#iExp").onclick=()=>exportIncome(incomeRows()));
+    $("#iBody").onclick=e=>{ const tr=e.target.closest("tr[data-id]"); if(tr&&S.policies[tr.dataset.id]) openPolicy("view",S.policies[tr.dataset.id]); };
+    $("#iPager").onclick=e=>{ const b=e.target.closest("[data-pg]"); if(!b) return; IT.page+=b.dataset.pg==="next"?1:-1; renderIncomeBody(); };
+    S.shell.income=true;
+  }
+  renderIncomeBody();
+}
+function renderIncomeBody(){
+  const ci=can("canViewIncome"), cp=can("canViewPayout"); const rows=incomeRows();
+  const T=rows.reduce((a,x)=>({prem:a.prem+num(x.premiumCollected),comm:a.comm+num(x.commission)+num(x.brokerage),pay:a.pay+num(x.payoutRM)}),{prem:0,comm:0,pay:0});
+  const st=(c,ic,l,v,s)=>`<div class="stat ${c}"><div class="si">${I(ic)}</div><div><span>${l}</span><b>${v}</b><small>${s}</small></div></div>`;
+  $("#iStats").innerHTML=(ci?st("b","rupee","Total Premium",inrC(T.prem),`${rows.length.toLocaleString("en-IN")} records`)+st("o","chart","Total Commission",inrC(T.comm),"commission + brokerage"):"")+(cp?st("k","wallet","Total Payout",inrC(T.pay),"to RMs"):"")+(ci?st("gr","check","Net Profit",inrC(T.comm-T.pay),T.comm?`${Math.round((T.comm-T.pay)/T.comm*100)}% margin`:""):"");
+  const pages=Math.max(1,Math.ceil(rows.length/IT.per)); IT.page=Math.min(Math.max(1,IT.page),pages);
+  const cols=5+(ci?4:0)+(cp?1:0)+2;
+  $("#iBody").innerHTML=rows.length?rows.slice((IT.page-1)*IT.per,IT.page*IT.per).map(x=>`<tr class="ck" data-id="${x.policyId||x.id}"><td>${fmtD(x.date)}</td><td><b>${esc(x.policyNo)}</b></td><td>${esc(x.custName)}</td><td>${esc(x.company)}</td><td>${esc(x.rmName||"—")}</td>
+    ${ci?`<td class="r">${inr(x.premiumCollected)}</td><td class="r">${inr(x.commission)}</td><td class="r">${inr(x.brokerage)}</td>`:""}${cp?`<td class="r">${inr(x.payoutRM)}</td>`:""}${ci?`<td class="r"><b style="color:${num(x.netIncome)<0?"var(--er)":"var(--ok)"}">${inr(x.netIncome)}</b></td>`:""}
+    <td>${esc(x.payMethod||"—")}</td><td>${esc(x.payRef||"—")}</td></tr>`).join(""):emptyRow(cols,"No income records for these filters.");
+  $("#iPager").innerHTML=`<span>${rows.length.toLocaleString("en-IN")} records</span><div><button class="btn sm" data-pg="prev" ${IT.page<=1?"disabled":""}>‹ Prev</button><span>Page ${IT.page} / ${pages}</span><button class="btn sm" data-pg="next" ${IT.page>=pages?"disabled":""}>Next ›</button></div>`;
+  const g={}; rows.forEach(x=>{ const k=x.rmName||"Unassigned"; g[k]??={n:0,prem:0,comm:0,pay:0}; g[k].n++; g[k].prem+=num(x.premiumCollected); g[k].comm+=num(x.commission)+num(x.brokerage); g[k].pay+=num(x.payoutRM); });
+  $("#iRmBody").innerHTML=Object.entries(g).sort((a,b)=>b[1].comm-a[1].comm).map(([k,v])=>`<tr><td><b>${esc(k)}</b></td><td class="r">${v.n}</td>${ci?`<td class="r">${inr(v.prem)}</td><td class="r">${inr(v.comm)}</td>`:""}${cp?`<td class="r">${inr(v.pay)}</td>`:""}${ci?`<td class="r"><b>${inr(v.comm-v.pay)}</b></td>`:""}</tr>`).join("")||emptyRow(6,"No data");
+}
+
+/* ================================ RENEWALS ================================ */
+const RT={b:"30",showRem:false};
+function renderRenewals(){
+  const el=$("#pg-renewals"); const all=renewalItems();
+  const inB=(r,b)=>b==="over"?r.days<0:b==="1"?r.days>=0&&r.days<=1:r.days>=0&&r.days<=+b;
+  const list=all.filter(r=>inB(r,RT.b)&&(RT.showRem||!r.reminded));
+  const cnt=b=>all.filter(r=>inB(r,b)&&!r.reminded).length;
+  const cr=can("canAddPolicy")&&can("canEditPolicy");
+  el.innerHTML=`
+  <div class="ph"><div><h2>${esc(lobTitle("Renewal Reminders"))}</h2><p>Premium dues and policy expiries in the next 30 days (and up to 60 days overdue)</p></div>
+    <div class="ph-a"><label class="row" style="gap:8px;align-items:center;font-size:13px;font-weight:600"><span class="sw"><input type="checkbox" id="rShow" ${RT.showRem?"checked":""}><span></span></span>Show reminded</label>
+    ${can("canDownloadExcel")?`<button class="btn" id="rExp">${I("download")}Export</button>`:""}</div></div>
+  <div class="tabs">${[["over","Overdue"],["1","Today / 1 day"],["7","7 days"],["15","15 days"],["30","30 days"]].map(([k,l])=>`<button class="tab ${RT.b===k?"on":""}" data-b="${k}">${l}${cnt(k)?`<span class="cnt">${cnt(k)}</span>`:""}</button>`).join("")}</div>
+  <div class="card p0"><div class="tw"><table class="tbl"><thead><tr><th>Due date</th><th>When</th><th>Due for</th><th>Policy No</th><th>Customer</th><th>Phone</th><th>Company / Plan</th><th>Type</th><th class="r">Premium</th><th>RM</th><th>Reminder</th><th class="r">Actions</th></tr></thead>
+  <tbody>${list.length?list.map(r=>`<tr data-id="${r.p.id}" data-due="${r.due}"><td><b>${fmtD(r.due)}</b></td><td>${dueBadge(r.days)}</td><td>${r.kind==="Maturity"?'<span class="bd bl">Maturity</span>':esc(r.kind)}</td><td>${esc(r.p.policyNo)}</td><td class="nm"><b>${esc(r.p.custName)}</b></td><td>${esc(r.p.phone||"—")}</td>
+    <td class="nm"><b>${esc(r.p.company)}</b><small>${esc(r.p.plan||"")}</small></td><td>${catBadge(r.p.category)}</td><td class="r"><b>${inr(r.p.premium)}</b></td><td>${esc(r.p.rmName||"—")}</td>
+    <td>${r.reminded?`<span class="bd gr">${I("check")}Reminded</span>`:`<span class="bd gy">Pending</span>`}</td>
+    <td><div class="acts"><button class="btn sm" data-a="wa" title="WhatsApp">${I("msg")}WhatsApp</button>${r.reminded?"":`<button class="btn sm" data-a="mark">${I("check")}Mark</button>`}${r.kind==="Maturity"?(can("canEditPolicy")?`<button class="btn sm p" data-a="mature">${I("flag")}Matured</button>`:""):cr?`<button class="btn sm p" data-a="renew">${I("renew")}Renew</button>`:""}<button class="btn g ic" data-a="view">${I("eye")}</button></div></td></tr>`).join(""):emptyRow(12,"Nothing in this window. 🎉")}</tbody></table></div></div>
+  <p class="mu" style="font-size:12px;margin-top:10px">Life premiums roll forward by frequency and Life maturities (including paid-up policies) show as <b>Maturity</b>; Health/Motor show the renewal date. Closed policies (cancelled, matured, surrendered, claim settled) never appear here. Wire automatic WhatsApp/SMS/email in <code>sendReminderAPI()</code>.</p>`;
+  el.querySelector(".tabs").onclick=e=>{ const b=e.target.closest("[data-b]"); if(b){ RT.b=b.dataset.b; renderRenewals(); } };
+  $("#rShow").onchange=e=>{ RT.showRem=e.target.checked; renderRenewals(); };
+  $("#rExp")&&($("#rExp").onclick=()=>xlsxDownload(list.map(r=>({"Due Date":r.due,"Days":r.days,"Policy No":r.p.policyNo,"Customer":r.p.custName,"Phone":r.p.phone,"Company":r.p.company,"Plan":r.p.plan,"Type":r.p.category,"Premium":num(r.p.premium),"Due For":r.kind,"RM":r.p.rmName,"Reminded":r.reminded?"Yes":"No"})),lobFile("Renewals")));
+  el.querySelector("tbody").onclick=e=>{ const tr=e.target.closest("tr[data-id]"); if(!tr) return; const p=S.policies[tr.dataset.id], due=tr.dataset.due, a=e.target.closest("[data-a]")?.dataset.a;
+    if(a==="wa") openWhatsApp(p,due); if(a==="mark") markReminded(p,due); if(a==="mature") openStatusModal(p,"Matured"); if(a==="renew") openPolicy("renew",p); if(a==="view") openPolicy("view",p); };
+}
+
+/* ================================ POLICY LIFECYCLE (status changes) ================================
+   Life   : Paid-up · Surrendered · Matured · Cancelled (free-look) · Lapsed · Revive → Active · Claim Settled (via Claims)
+   Health / Motor / Other : Cancelled · Lapsed (not renewed) · Reactivate → Active
+   Closed statuses never show in renewal reminders. Health / Motor stay Active after a claim and renew as usual.
+   Paid-up life policies stop premium reminders but still show their Maturity date. */
+const CLOSED_ST = ["Cancelled","Matured","Surrendered","Claim Settled"];
+const ALL_ST = ["Active","Lapsed","Paid-up","Renewed","Cancelled","Matured","Surrendered","Claim Settled"];
+const LIFE_ST_ACTIONS = [
+  ["Paid-up","Make Paid-up","Paid-up sum assured (₹)"],
+  ["Surrendered","Surrender","Surrender value received (₹)"],
+  ["Matured","Mark Matured","Maturity amount received (₹)"],
+  ["Cancelled","Cancel (free-look / other)","Refund amount (₹)"],
+  ["Lapsed","Mark Lapsed",""],
+  ["Active","Revive / Reinstate",""]
+];
+const GEN_ST_ACTIONS = [
+  ["Cancelled","Cancel policy","Refund amount (₹)"],
+  ["Lapsed","Mark Lapsed (not renewed)",""],
+  ["Active","Reactivate",""]
+];
+const isLife = c => String(c||"").toLowerCase()==="life";
+const isHealth = c => String(c||"").toLowerCase()==="health";
+const isClosed = s => CLOSED_ST.includes(s);
+
+function openStatusModal(p, preset=""){
+  if(!can("canEditPolicy")) return toast("You don't have permission to change policy status.","er");
+  const acts=(isLife(p.category)?LIFE_ST_ACTIONS:GEN_ST_ACTIONS).filter(a=>a[0]!==p.status);
+  const sel=preset&&acts.some(a=>a[0]===preset)?preset:acts[0][0];
+  const m=openModal({title:`Change status · ${esc(p.policyNo)}`,body:`
+    <div class="note" style="margin-bottom:14px"><b>${esc(p.custName)}</b> · ${esc(p.company)} · ${catBadge(p.category)} · now ${statusBadge(p.status)}</div>
+    <div class="fg" style="grid-template-columns:1fr 1fr">
+      <label class="f w2">New status<select class="in" id="stAct">${acts.map(a=>`<option value="${esc(a[0])}" ${a[0]===sel?"selected":""}>${esc(a[1])} → ${esc(a[0])}</option>`).join("")}</select></label>
+      <label class="f">Effective date<input class="in" type="date" id="stDate" value="${today()}"></label>
+      <label class="f" id="stAmtL"><span id="stAmtT">Amount</span><input class="in" type="number" step="any" id="stAmt"></label>
+      <label class="f" id="stRefL">Payment ref / UTR<input class="in" id="stRef"></label>
+      <label class="f w2">Reason / remarks<textarea class="in" id="stNote" placeholder="e.g. customer request, free-look cancellation, term completed…"></textarea></label>
+    </div>
+    <div class="note" id="stInfo" style="margin-top:12px"></div>`,
+    footer:`<button class="btn" data-c>Cancel</button><button class="btn p" id="stSave">${I("check")}Update status</button>`});
+  const upd=()=>{ const a=acts.find(x=>x[0]===$("#stAct",m).value); const amt=!!a[2];
+    $("#stAmtL",m).classList.toggle("hidden",!amt); $("#stRefL",m).classList.toggle("hidden",!amt||a[0]==="Paid-up"); $("#stAmtT",m).textContent=a[2]||"";
+    $("#stInfo",m).innerHTML = isClosed(a[0]) ? `This <b>closes</b> the policy — it will no longer appear in renewal reminders.`
+      : a[0]==="Paid-up" ? "Paid-up: no further premiums are due, so premium reminders stop. The policy stays in force and its maturity date still shows in Renewals."
+      : a[0]==="Lapsed" ? "Lapsed policies stop showing in reminders. Use Revive / Reactivate if the customer pays later."
+      : "The policy becomes Active again and renewal reminders resume."; };
+  $("#stAct",m).onchange=upd; upd();
+  m.querySelector("[data-c]").onclick=()=>m._close(true);
+  $("#stSave",m).onclick=async()=>{
+    const st=$("#stAct",m).value, date=$("#stDate",m).value||today(), amt=$("#stAmt",m).value, ref=$("#stRef",m).value.trim(), note=$("#stNote",m).value.trim();
+    if(isClosed(st) && !(await confirmBox(`Close policy ${p.policyNo} as "${st}"? It will stop appearing in renewals.`,"Yes, close it"))) return;
+    const entry={status:st,from:p.status||"",date,amount:amt===""?"":num(amt),ref,note,by:S.profile.name||S.user.email,at:Date.now()};
+    const patch={status:st,statusDate:date,statusHistory:[...(p.statusHistory||[]),entry],updatedAt:serverTimestamp(),updatedBy:S.user.uid};
+    if(isClosed(st)) patch.closure={type:st,date,amount:entry.amount,ref,note};
+    if(st==="Paid-up") patch.paidUp={date,value:entry.amount};
+    if(st==="Active") patch.closure=null;
+    try{ await updateDoc(doc(db,"policies",p.id),patch); logAct("policy.status",p.policyNo,`${p.status||""} → ${st}`); toast(`Status updated to ${st}.`,"ok"); m._close(true); }
+    catch(e){ toast("Update failed: "+(e.code||e.message),"er"); }
+  };
+}
+
+/* Extra sections in the policy View: claims on this policy + status history */
+function policyExtras(p){
+  const cl=Object.values(S.claims).filter(c=>c.policyId===p.id).sort((a,b)=>String(b.intimationDate||"").localeCompare(String(a.intimationDate||"")));
+  const h=[...(p.statusHistory||[])].reverse();
+  return `<div class="sec"><h4>Claims</h4>${cl.length?`<div class="tw"><table class="tbl"><thead><tr><th>Claim No</th><th>Intimated</th><th>Claim type</th><th class="r">Claimed</th><th class="r">Settled</th><th>Status</th></tr></thead><tbody>${cl.map(c=>`<tr class="ck" data-claim="${c.id}"><td><b>${esc(c.claimNo||"—")}</b></td><td>${fmtD(c.intimationDate)}</td><td>${esc(c.claimType)}</td><td class="r">${inr(c.claimAmount)}</td><td class="r">${c.settledAmount?inr(c.settledAmount):"—"}</td><td>${claimBadge(c.status)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="mu" style="font-size:13px">No claims on this policy.</p>`}</div>
+  ${h.length?`<div class="sec"><h4>Status history</h4>${h.map(x=>`<div class="list-i"><div class="tx"><b>${esc(x.from||"—")} → ${esc(x.status)} · ${fmtD(x.date)}</b><small>${[x.amount!==""&&x.amount!=null?inr(x.amount):"",x.ref,x.note,`by ${x.by} · ${fmtTs(x.at)}`].filter(Boolean).map(esc).join(" · ")}</small></div>${statusBadge(x.status)}</div>`).join("")}</div>`:""}`;
+}
+
+/* ================================ CLAIMS ================================
+   claims/{id} — one doc per claim, linked to policies/{policyId}.
+   Life death / maturity claim settled → policy can be closed (Claim Settled / Matured).
+   Health / Motor claims never close the policy; it keeps coming up for renewal. */
+const CLAIM_TYPES = {
+  life:["Death Claim","Maturity Claim","Critical Illness / Rider","Accident Benefit","Survival Benefit"],
+  health:["Cashless","Reimbursement","Pre / Post Hospitalisation","Day Care"],
+  motor:["Own Damage","Third Party","Theft","Total Loss","Glass / Windshield"]
+};
+const claimTypes = c => CLAIM_TYPES[String(c||"").toLowerCase()] || ["General Claim"];
+const CLAIM_ST = ["Intimated","Documents Pending","Under Process","Approved","Settled","Rejected","Withdrawn"];
+const CLAIM_DONE = ["Settled","Rejected","Withdrawn"];
+const claimBadge = s => `<span class="bd ${({Intimated:"bl","Documents Pending":"wa","Under Process":"or",Approved:"bl",Settled:"gr",Rejected:"er",Withdrawn:"gy"})[s]||"gy"}">${esc(s||"—")}</span>`;
+const claimPlace = c => isMotor(c)?"Garage / Surveyor":isHealth(c)?"Hospital":"Cause of claim";
+const claimPerson = c => isLife(c)?"Claimant (nominee)":isHealth(c)?"Patient name":"Driver name";
+const claimEvent = c => isLife(c)?"Date of event":isHealth(c)?"Admission date":"Accident / loss date";
+const lobClaims = () => Object.values(S.claims).filter(c=>inLob(c.category));
+const openClaims = () => Object.values(S.claims).filter(c=>!CLAIM_DONE.includes(c.status));
+const closesPolicy = (cat,type) => isLife(cat) && (type==="Death Claim"||type==="Maturity Claim");
+
+function findPolicyByInput(v){
+  const no=String(v||"").split(" — ")[0].trim().toLowerCase(); if(!no) return null;
+  return Object.values(S.policies).find(p=>String(p.policyNo).toLowerCase()===no) || null;
+}
+function openClaim(c=null, pol=null){
+  const rw=can("canManageClaims"), edit=!!c;
+  if(!edit && !rw) return toast("You don't have permission to register claims.","er");
+  let p = pol || (c && S.policies[c.policyId]) || null;
+  const d = c ? {...c} : {status:"Intimated",intimationDate:today()};
+  const ro = !rw;
+  const docs=[...(c?.docs||[])], pending=[], removed=[];
+  const v = k => esc(d[k]??"");
+  const inp = (id,label,k,type="text",extra="") => `<label class="f ${extra}">${label}<input class="in" id="${id}" type="${type}" ${type==="number"?'step="any"':""} value="${v(k)}" ${ro?"readonly":""}></label>`;
+  const polBox = p ? `<div class="note" id="clPolInfo"><b>${esc(p.policyNo)}</b> · ${esc(p.custName)} · ${esc(p.company)} · ${catBadge(p.category)} ${statusBadge(p.status)}</div>`
+    : `<label class="f">Policy — type policy no. or customer name<input class="in" id="clPol" list="clPolDL" placeholder="Start typing…" autocomplete="off"><datalist id="clPolDL">${lobPolicies().map(x=>`<option value="${esc(x.policyNo)} — ${esc(x.custName)}">`).join("")}</datalist></label><div class="note hidden" id="clPolInfo" style="margin-top:8px"></div>`;
+  const hist=[...(c?.history||[])].reverse();
+  const m=openModal({wide:true,title:edit?`Claim · ${esc(c.claimNo||c.policyNo)}`:"Register Claim",body:`
+    ${polBox}
+    <div class="sec" style="margin-top:16px"><h4>Claim details</h4><div class="fg">
+      ${inp("clNo","Claim no. (insurer)","claimNo")}
+      <label class="f">Claim type<select class="in" id="clType" ${ro?"disabled":""}></select></label>
+      <label class="f">Status<select class="in" id="clSt" ${ro?"disabled":""}>${CLAIM_ST.map(s=>`<option ${s===d.status?"selected":""}>${s}</option>`).join("")}</select></label>
+      ${inp("clInt","Intimation date","intimationDate","date")}
+      <label class="f"><span id="clIncT">Date of event</span><input class="in" id="clInc" type="date" value="${v("incidentDate")}" ${ro?"readonly":""}></label>
+      <label class="f"><span id="clPlaceT">Hospital</span><input class="in" id="clPlace" value="${v("place")}" ${ro?"readonly":""}></label>
+      <label class="f"><span id="clPersonT">Patient name</span><input class="in" id="clPerson" value="${v("person")}" ${ro?"readonly":""}></label>
+    </div></div>
+    <div class="sec"><h4>Amounts &amp; settlement</h4><div class="fg">
+      ${inp("clAmt","Claimed amount (₹)","claimAmount","number")}
+      ${inp("clApp","Approved amount (₹)","approvedAmount","number")}
+      ${inp("clSet","Settled amount (₹)","settledAmount","number")}
+      ${inp("clSetD","Settlement date","settledDate","date")}
+      ${inp("clRef","Payment ref / UTR","payRef")}
+      <label class="f w2">Remarks / rejection reason<textarea class="in" id="clNote" ${ro?"readonly":""}>${v("remarks")}</textarea></label>
+    </div>
+    <div class="note" id="clCloseBox" style="margin-top:12px"></div></div>
+    <div class="sec"><h4>Claim documents</h4><div class="dslot"><div class="dslot-h"><b>Claim form, bills, discharge summary, survey report, settlement letter…</b>${ro?"":`<button type="button" class="btn sm" id="clAttach">${I("clip")}Attach</button>`}</div><div class="dlist" id="clDocs"></div></div></div>
+    ${hist.length?`<div class="sec"><h4>Claim history</h4>${hist.map(x=>`<div class="list-i"><div class="tx"><b>${esc(x.status)}</b><small>${esc([x.note,`by ${x.by} · ${fmtTs(x.at)}`].filter(Boolean).join(" · "))}</small></div>${claimBadge(x.status)}</div>`).join("")}</div>`:""}`,
+    footer: ro ? `<span class="sp"></span><button class="btn p" data-c>Close</button>`
+      : `<span class="sp"></span><button class="btn" data-c>Cancel</button><button class="btn p" id="clSave">${I("check")}${edit?"Save claim":"Register claim"}</button>`});
+  m.querySelector("[data-c]").onclick=()=>m._close(true);
+  const cat=()=>p?.category||"";
+  const refreshCat=()=>{
+    if(!p){ $("#clType",m).innerHTML=`<option value="">Select a policy first</option>`; refreshClose(); return; }
+    const types=claimTypes(cat()), selv=$("#clType",m).value;
+    const cur=types.includes(selv)?selv:(d.claimType||types[0]);   // keep a saved type even if it's not in the list
+    $("#clType",m).innerHTML=[...new Set([...(cur&&!types.includes(cur)?[cur]:[]),...types])].map(t=>`<option ${t===cur?"selected":""}>${esc(t)}</option>`).join("");
+    $("#clPlaceT",m).textContent=claimPlace(cat()); $("#clPersonT",m).textContent=claimPerson(cat()); $("#clIncT",m).textContent=claimEvent(cat());
+    if(!$("#clPerson",m).value && p) $("#clPerson",m).value=isLife(cat())?(p.nomineeName||""):(p.custName||"");
+    refreshClose();
+  };
+  const refreshClose=()=>{
+    const box=$("#clCloseBox",m), type=$("#clType",m).value;
+    if(!p){ box.innerHTML="Select a policy first."; return; }
+    if(closesPolicy(cat(),type)){
+      const to=type==="Maturity Claim"?"Matured":"Claim Settled";
+      box.innerHTML=`<label class="row" style="gap:10px;align-items:center;font-weight:600;flex-wrap:nowrap"><span class="sw" style="flex:none;min-width:0"><input type="checkbox" id="clClose" ${isClosed(p.status)||ro?"disabled":""} checked><span></span></span><span style="min-width:0">When settled, close this policy as <b>${to}</b>${isClosed(p.status)?` (already ${esc(p.status)})`:""}</span></label>`;
+    } else box.innerHTML=isLife(cat())?"Rider / benefit claim — the life policy continues after settlement."
+      : `${esc(cat()||"This")} policy stays <b>Active</b> after the claim and will come up for renewal as usual.`;
+  };
+  const renderDocs=()=>{ $("#clDocs",m).innerHTML=[...docs.filter(x=>!removed.includes(x)).map((x,i)=>`<span class="chip"><a data-open="d:${docs.indexOf(x)}">${esc(x.name)}</a>${ro?"":`<button type="button" data-rm="d:${docs.indexOf(x)}">×</button>`}</span>`),
+      ...pending.map((f,i)=>`<span class="chip"><a data-open="p:${i}">${esc(f.name)}</a><em>pending</em><button type="button" data-rm="p:${i}">×</button></span>`)].join("")||`<span class="mu" style="font-size:12px">No files</span>`; };
+  $("#clDocs",m).onclick=e=>{ const o=e.target.closest("[data-open]"); if(o){ const [k,i]=o.dataset.open.split(":"); k==="p"?window.open(URL.createObjectURL(pending[+i]),"_blank"):openDoc(docs[+i]); return; }
+    const r=e.target.closest("[data-rm]"); if(r){ const [k,i]=r.dataset.rm.split(":"); if(k==="p") pending.splice(+i,1); else removed.push(docs[+i]); renderDocs(); } };
+  $("#clAttach",m)&&($("#clAttach",m).onclick=()=>{ const inp=$("#docInput"); inp.value=""; inp.onchange=()=>{ pending.push(...inp.files); renderDocs(); }; inp.click(); });
+  $("#clType",m).onchange=refreshClose;
+  $("#clSt",m).onchange=()=>{ if($("#clSt",m).value==="Settled"&&!$("#clSetD",m).value) $("#clSetD",m).value=today(); };
+  if($("#clPol",m)) $("#clPol",m).oninput=e=>{ const np=findPolicyByInput(e.target.value); if(np===p) return; p=np;
+    const box=$("#clPolInfo",m); box.classList.toggle("hidden",!p);
+    if(p) box.innerHTML=`<b>${esc(p.policyNo)}</b> · ${esc(p.custName)} · ${esc(p.company)} · ${catBadge(p.category)} ${statusBadge(p.status)}${isClosed(p.status)?" · <b style='color:var(--er)'>policy is closed</b>":""}`;
+    $("#clPerson",m).value=""; refreshCat(); };
+  refreshCat(); renderDocs();
+  $("#clSave",m)&&($("#clSave",m).onclick=async()=>{
+    if(!p) return toast("Pick a policy for this claim.","er");
+    const g=id=>$("#"+id,m).value.trim(), n=id=>g(id)===""?"":num(g(id));
+    const st=g("clSt"), type=g("clType");
+    if(!g("clInt")) return toast("Intimation date is required.","er");
+    if(st==="Settled" && g("clSet")==="") return toast("Enter the settled amount.","er");
+    const btn=$("#clSave",m); btn.disabled=true; btn.innerHTML='<div class="spin"></div> Saving…';
+    try{
+      const ref=edit?doc(db,"claims",c.id):doc(collection(db,"claims"));
+      const up=[]; for(const f of pending) up.push(await uploadFile(p.id,"Claim",f));
+      const changed=!edit||st!==c.status;
+      const data={policyId:p.id,policyNo:p.policyNo,custName:p.custName,phone:p.phone||"",company:p.company||"",category:p.category||"",rmName:p.rmName||"",
+        claimNo:g("clNo"),claimType:type,status:st,intimationDate:g("clInt"),incidentDate:g("clInc"),place:g("clPlace"),person:g("clPerson"),
+        claimAmount:n("clAmt"),approvedAmount:n("clApp"),settledAmount:n("clSet"),settledDate:g("clSetD"),payRef:g("clRef"),remarks:g("clNote"),
+        docs:[...docs.filter(x=>!removed.includes(x)),...up],
+        history:[...(c?.history||[]),...(changed?[{status:st,note:g("clNote"),by:S.profile.name||S.user.email,at:Date.now()}]:[])],
+        deleted:false,updatedAt:serverTimestamp(),updatedBy:S.user.uid};
+      if(!edit) Object.assign(data,{createdBy:p.createdBy||S.user.uid,loggedBy:S.user.uid,loggedByName:S.profile.name||S.user.email,createdAt:serverTimestamp()});
+      const b=writeBatch(db); b.set(ref,data,{merge:true});
+      const wantClose=st==="Settled" && closesPolicy(p.category,type) && $("#clClose",m)?.checked && !isClosed(p.status);
+      let closed=false;
+      if(wantClose){
+        if(can("canEditPolicy")){
+          const to=type==="Maturity Claim"?"Matured":"Claim Settled";
+          const entry={status:to,from:p.status||"",date:data.settledDate||today(),amount:data.settledAmount,ref:data.payRef,note:`${type} ${data.claimNo||""}`.trim(),by:S.profile.name||S.user.email,at:Date.now()};
+          b.update(doc(db,"policies",p.id),{status:to,statusDate:entry.date,closure:{type:to,date:entry.date,amount:entry.amount,ref:entry.ref,note:entry.note,claimId:ref.id},statusHistory:[...(p.statusHistory||[]),entry],updatedAt:serverTimestamp(),updatedBy:S.user.uid});
+          closed=true;
+        } else toast("Claim saved, but you don't have Edit Policy permission to close the policy.","wa");
+      }
+      await b.commit();
+      for(const r of removed){ try{ if(r.path&&storage) await deleteObject(sref(storage,r.path)); if(r.fileId) await deleteDoc(doc(db,"policyFiles",r.fileId)); }catch{} }
+      logAct(edit?"claim.update":"claim.add",p.policyNo,`${type} · ${st}`);
+      toast(closed?"Claim settled and policy closed.":edit?"Claim updated.":"Claim registered.","ok"); m._close(true);
+    }catch(e){ console.error(e); toast("Save failed: "+(e.code||e.message),"er"); btn.disabled=false; btn.innerHTML=`${I("check")}Save claim`; }
+  });
+}
+
+const CT={tab:"open",q:"",comp:"",page:1,per:50};
+const claimInTab=(c,t)=>t==="all"||(t==="open"?!CLAIM_DONE.includes(c.status):t==="settled"?c.status==="Settled":c.status==="Rejected"||c.status==="Withdrawn");
+function claimRows(){
+  const q=CT.q.trim().toLowerCase();
+  return lobClaims().filter(c=>claimInTab(c,CT.tab)&&(!CT.comp||c.company===CT.comp)&&
+    (!q||[c.claimNo,c.policyNo,c.custName,c.phone,c.claimType,c.person,c.place].some(v=>String(v||"").toLowerCase().includes(q))))
+    .sort((a,b)=>String(b.intimationDate||"").localeCompare(String(a.intimationDate||"")));
+}
+function renderClaims(){
+  const el=$("#pg-claims");
+  if(!S.shell.claims){
+    el.innerHTML=`
+    <div class="ph"><div><h2>${esc(lobTitle("Claims"))}</h2><p>Track every claim from intimation to settlement. Life death/maturity claims can close the policy; Health &amp; Motor policies keep renewing.</p></div>
+      <div class="ph-a">${can("canDownloadExcel")?`<button class="btn" id="cExp">${I("download")}Export</button>`:""}${can("canManageClaims")?`<button class="btn o" id="cAdd">${I("plus")}Register Claim</button>`:""}</div></div>
+    <div class="stats" id="cStats"></div>
+    <div class="tabs" id="cTabs"></div>
+    <div class="card p0">
+      <div class="tbar">
+        <div class="srch">${I("search")}<input class="in" id="cQ" placeholder="Search claim no, policy no, customer, hospital/garage…" value="${esc(CT.q)}"></div>
+        <select class="in" id="cComp"><option value="">All companies</option>${S.settings.companies.map(c=>`<option ${c.name===CT.comp?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
+      </div>
+      <div class="tw"><table class="tbl"><thead><tr><th>Claim No</th><th>Intimated</th><th>Customer</th><th>Policy No</th><th>Company</th><th>Type</th><th>Claim type</th><th class="r">Claimed</th><th class="r">Settled</th><th>Status</th><th>Age</th><th class="r">Actions</th></tr></thead><tbody id="cBody"></tbody></table></div>
+      <div class="pager" id="cPager"></div>
+    </div>`;
+    $("#cQ").oninput=debounce(e=>{ CT.q=e.target.value; CT.page=1; renderClaimsBody(); },180);
+    $("#cComp").onchange=e=>{ CT.comp=e.target.value; CT.page=1; renderClaimsBody(); };
+    $("#cAdd")&&($("#cAdd").onclick=()=>openClaim());
+    $("#cExp")&&($("#cExp").onclick=()=>exportClaims(claimRows()));
+    $("#cTabs").onclick=e=>{ const t=e.target.closest("[data-t]"); if(t){ CT.tab=t.dataset.t; CT.page=1; renderClaimsBody(); } };
+    $("#cBody").onclick=e=>{ const tr=e.target.closest("tr[data-id]"); if(!tr) return; const c=S.claims[tr.dataset.id]; if(!c) return;
+      const a=e.target.closest("[data-a]")?.dataset.a;
+      if(a==="pol"&&S.policies[c.policyId]) return openPolicy("view",S.policies[c.policyId]);
+      openClaim(c); };
+    $("#cPager").onclick=e=>{ const b=e.target.closest("[data-pg]"); if(!b) return; CT.page+=b.dataset.pg==="next"?1:-1; renderClaimsBody(); };
+    S.shell.claims=true;
+  }
+  renderClaimsBody();
+}
+function renderClaimsBody(){
+  const all=lobClaims(), open=all.filter(c=>!CLAIM_DONE.includes(c.status)), settled=all.filter(c=>c.status==="Settled"), rej=all.filter(c=>c.status==="Rejected");
+  const st=(c,ic,l,v,s)=>`<div class="stat ${c}"><div class="si">${I(ic)}</div><div><span>${l}</span><b>${v}</b><small>${s}</small></div></div>`;
+  const dec=settled.length+rej.length;
+  $("#cStats").innerHTML=st("b","claim","Total Claims",all.length.toLocaleString("en-IN"),`${inrC(all.reduce((a,c)=>a+num(c.claimAmount),0))} claimed`)
+    +st("o","clock","Open Claims",open.length.toLocaleString("en-IN"),`${inrC(open.reduce((a,c)=>a+num(c.claimAmount),0))} in process`)
+    +st("gr","check","Settled Amount",inrC(settled.reduce((a,c)=>a+num(c.settledAmount),0)),`${settled.length} claims settled`)
+    +st("k","chart","Settlement Ratio",dec?Math.round(settled.length/dec*100)+"%":"—",`${rej.length} rejected`);
+  $("#cTabs").innerHTML=[["open","Open"],["settled","Settled"],["rejected","Rejected / Withdrawn"],["all","All"]].map(([k,l])=>{ const n=all.filter(c=>claimInTab(c,k)).length; return `<button class="tab ${CT.tab===k?"on":""}" data-t="${k}">${l}${n?`<span class="cnt">${n}</span>`:""}</button>`; }).join("");
+  const rows=claimRows(), pages=Math.max(1,Math.ceil(rows.length/CT.per)); CT.page=Math.min(Math.max(1,CT.page),pages);
+  $("#cBody").innerHTML=rows.length?rows.slice((CT.page-1)*CT.per,CT.page*CT.per).map(c=>{ const age=c.intimationDate?Math.max(0,-daysTo(c.intimationDate)):null;
+    return `<tr class="ck" data-id="${c.id}"><td><b>${esc(c.claimNo||"—")}</b></td><td>${fmtD(c.intimationDate)}</td><td class="nm"><b>${esc(c.custName)}</b><small>${esc(c.person&&c.person!==c.custName?c.person:c.phone||"")}</small></td>
+      <td><a data-a="pol">${esc(c.policyNo)}</a></td><td>${esc(c.company)}</td><td>${catBadge(c.category)}</td><td>${esc(c.claimType)}</td>
+      <td class="r"><b>${inr(c.claimAmount)}</b></td><td class="r">${c.settledAmount!==""&&c.settledAmount!=null?inr(c.settledAmount):"—"}</td><td>${claimBadge(c.status)}</td>
+      <td>${CLAIM_DONE.includes(c.status)?`<span class="mu">${c.settledDate?fmtD(c.settledDate):"closed"}</span>`:age!==null?`<span class="bd ${age>30?"er":age>15?"wa":"gy"}">${age} days</span>`:"—"}</td>
+      <td><div class="acts"><button class="btn g ic" title="${can("canManageClaims")?"Open / update":"View"}">${I(can("canManageClaims")?"edit":"eye")}</button></div></td></tr>`; }).join("")
+    : emptyRow(12, S.synced.claims||all.length?"No claims in this view.":"Loading claims…");
+  $("#cPager").innerHTML=`<span>${rows.length.toLocaleString("en-IN")} claims</span><div><button class="btn sm" data-pg="prev" ${CT.page<=1?"disabled":""}>‹ Prev</button><span>Page ${CT.page} / ${pages}</span><button class="btn sm" data-pg="next" ${CT.page>=pages?"disabled":""}>Next ›</button></div>`;
+}
+function exportClaims(list){
+  if(!can("canDownloadExcel")) return;
+  xlsxDownload(list.map(c=>({"Claim No":c.claimNo,"Intimation Date":c.intimationDate,"Event Date":c.incidentDate,"Policy No":c.policyNo,"Customer":c.custName,"Phone":c.phone,"Company":c.company,"Type":c.category,
+    "Claim Type":c.claimType,"Hospital / Garage / Cause":c.place,"Claimant / Patient":c.person,"Claimed":num(c.claimAmount),"Approved":c.approvedAmount===""?"":num(c.approvedAmount),
+    "Settled":c.settledAmount===""?"":num(c.settledAmount),"Settlement Date":c.settledDate,"Payment Ref":c.payRef,"Status":c.status,"RM":c.rmName,"Remarks":c.remarks})),lobFile("Claims"));
+}
+
+/* ================================ MOBILE: tables → cards ================================
+   Every .tbl gets data-label on its cells (from the header); under 700px CSS shows each row as a card. */
+function labelTables(){
+  $$("table.tbl").forEach(t=>{
+    const hs=$$("thead th",t).map(th=>th.textContent.replace(/[↑↓]/g,"").trim());
+    t.classList.add("rsp");
+    $$("tbody tr",t).forEach(tr=>{ if(tr.dataset.lbl) return; let i=0;
+      [...tr.children].forEach(td=>{ const span=+td.getAttribute("colspan")||1; const h=span>1?"":(hs[i]||""); td.setAttribute("data-label",/^actions$/i.test(h)?"":h); i+=span; });
+      tr.dataset.lbl="1"; });
+  });
+}
+let _lblQ=false;
+new MutationObserver(()=>{ if(_lblQ) return; _lblQ=true; requestAnimationFrame(()=>{ _lblQ=false; labelTables(); }); }).observe(document.body,{childList:true,subtree:true});
+
+/* ================================ BULK UPLOAD / EXPORT ================================ */
+const SYN={policyNo:["policyno","policynumber","polno","policy"],company:["company","insurer","insurancecompany","companyname"],category:["category","type","policytype","lob","product"],plan:["plan","planname","policyname","productname","scheme"],
+  sumAssured:["sumassured","suminsured","sa","si","cover"],premium:["premium","premiumamount","totalpremium","grosspremium"],frequency:["frequency","mode","premiummode","paymentfrequency"],startDate:["startdate","policystartdate","commencementdate","riskstartdate","dateofcommencement","doc","issuedate"],
+  endDate:["enddate","maturitydate","expirydate","policyenddate","riskenddate"],status:["status","policystatus"],custName:["customername","name","insuredname","clientname","policyholder","proposername","customer"],dob:["dob","dateofbirth","birthdate"],
+  gender:["gender","sex"],phone:["phone","mobile","mobileno","contact","phoneno","contactno"],email:["email","emailid","mail"],address:["address","addr"],nomineeName:["nominee","nomineename"],nomineeRelation:["nomineerelation","relation","relationship"],
+  kycType:["kyctype","idtype"],kycNo:["kycno","idno","pan","aadhaar","kycnumber","idnumber"],vehNo:["vehicleno","vehiclenumber","regno","registrationno","registrationnumber"],vehMake:["make","vehiclemake"],vehModel:["model","vehiclemodel"],vehYear:["year","mfgyear","manufacturingyear"],
+  engineNo:["engineno","enginenumber"],chassisNo:["chassisno","chassisnumber"],idv:["idv"],rmName:["rm","rmname","agent","agentname","relationshipmanager"],rmCode:["rmcode","agentcode"],branch:["branch"],commPct:["commission%","commissionpercent","commpct","commissionrate"],
+  premiumCollected:["premiumcollected","collected","amountcollected"],commission:["commission","agentcommission","income","commissionamount"],brokerage:["brokerage","incentive"],payoutRM:["payout","payouttorm","rmpayout"],payMethod:["paymentmethod","paymentmode","paymode"],payRef:["paymentref","transactionid","txnid","refno","chequeno","utr"]};
+const norm = s => String(s||"").toLowerCase().replace(/[^a-z0-9%]/g,"");
+const IMPORT_FIELDS = () => F.filter(f=>!f.ro&&fAllowed(f));
+let BU=null;
+function renderBulk(){
+  const el=$("#pg-bulk");
+  el.innerHTML=`
+  <div class="ph"><div><h2>Bulk Upload / Export</h2><p>Import thousands of policies from Excel/CSV, or download your data</p></div></div>
+  ${can("canUploadBulk")?`<div class="card" style="margin-bottom:18px"><div class="ch"><h3>1 · Upload Excel / CSV</h3><button class="btn sm" id="bTpl">${I("download")}Download template</button></div>
+    <div class="drop" id="bDrop">${I("upload")}<div><b>Drop your file here</b> or click to browse</div><small class="mu">.xlsx, .xls, .csv — first sheet is used · dates like 25/03/2024, 25-Mar-2024 or Excel dates</small></div>
+    <input type="file" id="bFile" hidden accept=".xlsx,.xls,.csv">
+    <div id="bMap"></div></div>`:""}
+  ${can("canDownloadExcel")?`<div class="card"><div class="ch"><h3>Export to Excel</h3></div><div class="row" style="justify-content:flex-start">
+    <button class="btn p" data-e="pol">${I("download")}${S.lob==="All"?"All":esc(S.lob)} Policies (${lobPolicies().length.toLocaleString("en-IN")})</button>
+    ${finAny()?`<button class="btn" data-e="inc">${I("download")}Income &amp; Payout</button>`:""}
+    <button class="btn" data-e="ren">${I("download")}Renewals (30 days)</button>
+    <button class="btn" data-e="clm">${I("download")}Claims</button>
+    ${can("canManageUsers")?`<button class="btn" data-e="usr">${I("download")}Users</button>`:""}</div>
+    <p class="mu" style="font-size:12px;margin-top:10px">Exports follow the tab selected at the top (${S.lob==="All"?"all lines":esc(S.lob)+" only"}) and only include columns your permissions allow.</p></div>`:""}`;
+  el.onclick=e=>{ const x=e.target.closest("[data-e]")?.dataset.e; if(!x) return;
+    if(x==="pol") exportPolicies(lobPolicies(),lobFile("Policies")); if(x==="inc") exportIncome(lobIncome());
+    if(x==="clm") exportClaims(lobClaims());
+    if(x==="ren") xlsxDownload(renewalItems().map(r=>({"Due Date":r.due,"Days":r.days,"Policy No":r.p.policyNo,"Customer":r.p.custName,"Phone":r.p.phone,"Company":r.p.company,"Premium":num(r.p.premium),"Due For":r.kind,"RM":r.p.rmName,"Reminded":r.reminded?"Yes":"No"})),lobFile("Renewals"));
+    if(x==="usr") xlsxDownload(S.users.map(u=>({Name:u.name,Email:u.email,Role:u.role,Active:u.active?"Yes":"No",...Object.fromEntries(PERMS.map(([k,l])=>[l,u.role==="master"||u.permissions?.[k]?"Yes":"No"]))})),"Users"); };
+  if(!can("canUploadBulk")) return;
+  const drop=$("#bDrop"), inp=$("#bFile");
+  drop.onclick=()=>inp.click();
+  drop.ondragover=e=>{ e.preventDefault(); drop.classList.add("ov"); }; drop.ondragleave=()=>drop.classList.remove("ov");
+  drop.ondrop=e=>{ e.preventDefault(); drop.classList.remove("ov"); e.dataTransfer.files[0]&&readSheet(e.dataTransfer.files[0]); };
+  inp.onchange=()=>inp.files[0]&&readSheet(inp.files[0]);
+  $("#bTpl").onclick=()=>{ const fs=IMPORT_FIELDS(); const sample={policyNo:"POL123456",company:S.settings.companies[0]?.name||"ABC General Insurance",category:"Motor",plan:"Private Car Package",sumAssured:500000,premium:12500,frequency:"Yearly",startDate:"01/04/2026",endDate:"31/03/2027",status:"Active",custName:"Rahul Sharma",dob:"15/08/1985",gender:"Male",phone:"9876543210",email:"rahul@example.com",vehNo:"OD02AB1234",rmName:S.settings.rms[0]?.name||"",commPct:15,commission:1875,payoutRM:500,payMethod:"UPI"};
+    const ws=XLSX.utils.aoa_to_sheet([fs.map(f=>f.l),fs.map(f=>sample[f.k]??"")]); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Policies"); XLSX.writeFile(wb,"Policy_Import_Template.xlsx"); };
+  if(BU) renderMapping();
+}
+async function readSheet(file){
+  try{
+    const wb=XLSX.read(await file.arrayBuffer(),{type:"array"}); const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{defval:"",raw:true}); if(!rows.length) return toast("No rows found in the first sheet.","er");
+    const headers=Object.keys(rows[0]); const map={};
+    for(const f of IMPORT_FIELDS()){ const cands=[norm(f.k),norm(f.l),...(SYN[f.k]||[])]; const h=headers.find(h=>cands.includes(norm(h))); if(h&&!Object.values(map).includes(h)) map[f.k]=h; }
+    BU={file:file.name,rows,headers,map,skipDup:true,addSettings:can("canManageSettings")}; renderMapping();
+  }catch(e){ toast("Could not read file: "+e.message,"er"); }
+}
+function renderMapping(){
+  const box=$("#bMap"); if(!box||!BU) return;
+  box.innerHTML=`<div style="margin-top:18px" class="ch"><h3>2 · Map columns <span class="mu" style="font-weight:500">— ${esc(BU.file)} · ${BU.rows.length.toLocaleString("en-IN")} rows</span></h3><button class="btn g sm" id="bReset">${I("x")}Cancel</button></div>
+    <div class="map">${IMPORT_FIELDS().map(f=>`<label class="${BU.map[f.k]?"mp":""}">${esc(f.l)}${f.k==="policyNo"||f.k==="custName"?' <span style="color:var(--o)">*</span>':""}<select class="in" data-map="${f.k}"><option value="">— skip —</option>${BU.headers.map(h=>`<option ${BU.map[f.k]===h?"selected":""}>${esc(h)}</option>`).join("")}</select></label>`).join("")}</div>
+    <div class="row" style="margin-top:14px;justify-content:flex-start;gap:18px">
+      <label class="row" style="gap:8px;align-items:center;font-weight:600;font-size:13px;flex:none"><span class="sw"><input type="checkbox" id="bSkip" ${BU.skipDup?"checked":""}><span></span></span>Skip duplicate policy numbers${can("canEditPolicy")?" (off = update existing)":""}</label>
+      ${can("canManageSettings")?`<label class="row" style="gap:8px;align-items:center;font-weight:600;font-size:13px;flex:none"><span class="sw"><input type="checkbox" id="bAdd" ${BU.addSettings?"checked":""}><span></span></span>Add new companies / plans / RMs to Settings</label>`:""}
+    </div>
+    <div class="ch" style="margin-top:18px"><h3>3 · Validate &amp; import</h3></div><div id="bVal"></div>`;
+  box.onchange=e=>{ const k=e.target.dataset.map; if(k){ BU.map[k]=e.target.value; e.target.closest("label").classList.toggle("mp",!!e.target.value); validateBulk(); } if(e.target.id==="bSkip"){ BU.skipDup=e.target.checked; validateBulk(); } if(e.target.id==="bAdd") BU.addSettings=e.target.checked; };
+  $("#bReset").onclick=()=>{ BU=null; box.innerHTML=""; };
+  validateBulk();
+}
+function buildRow(raw){
+  const o={}, errs=[];
+  for(const f of IMPORT_FIELDS()){ const h=BU.map[f.k]; if(!h) continue; const v=raw[h];
+    if(f.t==="date"){ const d=parseDate(v); if(d===null) errs.push(`${f.l}: invalid date "${v}"`); else o[f.k]=d; }
+    else if(f.t==="number"){ if(v!==""&&v!=null){ if(!/\d/.test(String(v))) errs.push(`${f.l}: not a number "${v}"`); else o[f.k]=num(v); } }
+    else o[f.k]=String(v??"").trim(); }
+  const pick=(k,list)=>{ if(o[k]){ const m=list.find(x=>x.toLowerCase()===o[k].toLowerCase()); if(m) o[k]=m; } };
+  pick("category",S.settings.categories); pick("frequency",S.settings.frequencies); pick("status",S.settings.statuses); pick("gender",S.settings.genders); pick("payMethod",S.settings.paymentModes);
+  if(o.company){ const c=S.settings.companies.find(c=>c.name.toLowerCase()===o.company.toLowerCase()); if(c) o.company=c.name; }
+  if(o.rmName){ const r=S.settings.rms.find(r=>r.name.toLowerCase()===o.rmName.toLowerCase()); if(r){ o.rmName=r.name; o.rmCode??=r.code; o.branch??=r.branch; } }
+  if(!o.category && S.lob!=="All") o.category=S.lob;  // rows without a type get the selected tab
+  o.status||="Active"; o.frequency||="Yearly";
+  if(!o.policyNo) errs.push("Policy Number missing"); if(!o.custName) errs.push("Customer Name missing");
+  return {o,errs};
+}
+function validateBulk(){
+  const box=$("#bVal"); if(!box) return;
+  const existing={}; Object.values(S.policies).forEach(p=>existing[String(p.policyNo).toLowerCase()]=p.id);
+  const seen=new Set(); const ok=[], bad=[]; let dups=0;
+  BU.rows.forEach((raw,i)=>{ const {o,errs}=buildRow(raw); const key=String(o.policyNo||"").toLowerCase();
+    if(key&&seen.has(key)) errs.push("Duplicate policy number inside file"); seen.add(key);
+    if(errs.length) return bad.push({i:i+2,errs});
+    const ex=existing[key]; if(ex){ dups++; if(BU.skipDup||!can("canEditPolicy")) return; o._id=ex; }
+    ok.push(o); });
+  BU.valid=ok;
+  box.innerHTML=`<div class="stats" style="margin-bottom:12px">
+      <div class="stat gr"><div class="si">${I("check")}</div><div><span>Ready to import</span><b>${ok.length.toLocaleString("en-IN")}</b><small>${ok.filter(o=>o._id).length} will update existing</small></div></div>
+      <div class="stat o"><div class="si">${I("refresh")}</div><div><span>Duplicates found</span><b>${dups}</b><small>${BU.skipDup?"skipped":"updated"}</small></div></div>
+      <div class="stat k"><div class="si">${I("x")}</div><div><span>Rows with errors</span><b>${bad.length}</b><small>will be skipped</small></div></div></div>
+    ${bad.length?`<div class="note" style="max-height:160px;overflow:auto;margin-bottom:12px">${bad.slice(0,50).map(b=>`Row ${b.i}: ${esc(b.errs.join("; "))}`).join("<br>")}${bad.length>50?`<br>…and ${bad.length-50} more`:""}</div>`:""}
+    <div class="row" style="justify-content:flex-start"><button class="btn o" id="bGo" ${ok.length?"":"disabled"}>${I("upload")}Import ${ok.length.toLocaleString("en-IN")} policies</button></div>
+    <div id="bProg" class="hidden" style="margin-top:14px"><div class="prog"><i></i></div><small class="mu" id="bProgT"></small></div>`;
+  $("#bGo").onclick=runImport;
+}
+async function runImport(){
+  const rows=BU.valid; if(!rows.length) return;
+  if(!(await confirmBox(`Import ${rows.length.toLocaleString("en-IN")} policies now? This uses about ${(rows.length*(finAny()?2:1)).toLocaleString("en-IN")} Firestore writes.`,"Import"))) return;
+  $("#bGo").disabled=true; $("#bProg").classList.remove("hidden");
+  const bar=$("#bProg i"), txt=$("#bProgT"); const CH=finAny()?200:400; let done=0;
+  try{
+    if(BU.addSettings&&can("canManageSettings")){
+      const s=S.settings; const cos=[...s.companies], plans=[...s.plans], rms=[...s.rms]; let ch=false;
+      rows.forEach(o=>{
+        if(o.company&&!cos.some(c=>c.name===o.company)){ cos.push({id:rid(),name:o.company,logo:""}); ch=true; }
+        if(o.plan&&o.company&&!plans.some(p=>p.name===o.plan&&p.company===o.company&&p.category===(o.category||""))){ plans.push({id:rid(),company:o.company,category:o.category||"",name:o.plan}); ch=true; }
+        if(o.rmName&&!rms.some(r=>r.name===o.rmName)){ rms.push({id:rid(),name:o.rmName,code:o.rmCode||"",branch:o.branch||"",commPct:o.commPct??""}); ch=true; } });
+      if(ch) await saveSettings({companies:cos,plans,rms});
+    }
+    for(let i=0;i<rows.length;i+=CH){
+      const b=writeBatch(db);
+      for(const o of rows.slice(i,i+CH)){
+        const exId=o._id; const ref=exId?doc(db,"policies",exId):doc(collection(db,"policies"));
+        const pol={}, fin={}; for(const [k,v] of Object.entries(o)){ if(k==="_id") continue; (FIN_KEYS.includes(k)?fin:pol)[k]=v; }
+        pol.renewalDate=nextDue(pol); if(pol.dob) pol.age=calcAge(pol.dob); pol.updatedAt=serverTimestamp(); pol.updatedBy=S.user.uid; pol.deleted=false;
+        if(!exId) Object.assign(pol,{createdBy:S.user.uid,createdByName:S.profile.name||S.user.email,createdAt:serverTimestamp(),docs:[],remindedFor:"",source:"bulk"});
+        b.set(ref,pol,{merge:true});
+        if(finAny()&&Object.keys(fin).length){
+          fin.premiumCollected??=pol.premium??"";
+          fin.netIncome=num(fin.commission)+num(fin.brokerage)-num(fin.payoutRM);
+          b.set(doc(db,"income",ref.id),{...fin,policyId:ref.id,policyNo:pol.policyNo,company:pol.company||"",category:pol.category||"",rmName:pol.rmName||"",custName:pol.custName,date:pol.startDate||"",
+            createdBy:exId?(S.policies[exId]?.createdBy||S.user.uid):S.user.uid,deleted:false,updatedAt:serverTimestamp()},{merge:true});
+        }
+      }
+      await b.commit(); done=Math.min(i+CH,rows.length);
+      bar.style.width=(done/rows.length*100)+"%"; txt.textContent=`${done.toLocaleString("en-IN")} / ${rows.length.toLocaleString("en-IN")} imported`;
+    }
+    logAct("bulk.import",BU.file,`${rows.length} rows`); toast(`Imported ${rows.length.toLocaleString("en-IN")} policies.`,"ok"); BU=null; setTimeout(()=>renderBulk(),1200);
+  }catch(e){ console.error(e); toast(`Import stopped after ${done} rows: ${e.code||e.message}`,"er"); $("#bGo").disabled=false; }
+}
+function exportPolicies(list,name){
+  if(!can("canDownloadExcel")) return;
+  const cols=F.filter(fAllowed);
+  xlsxDownload(list.map(p=>{ const fin=S.income[p.id]||{}, o={};
+    cols.forEach(f=>o[f.l]=f.s==="fin"?(fin[f.k]??""):f.k==="renewalDate"?nextDue(p):(p[f.k]??""));
+    o["Documents"]=(p.docs||[]).length; o["Created By"]=p.createdByName||""; o["Created At"]=p.createdAt?new Date(p.createdAt).toLocaleString("en-IN"):""; return o; }),name);
+}
+function exportIncome(list){
+  if(!can("canDownloadExcel")) return; const ci=can("canViewIncome"), cp=can("canViewPayout");
+  xlsxDownload(list.map(x=>({Date:x.date,"Policy No":x.policyNo,Customer:x.custName,Company:x.company,Type:x.category,RM:x.rmName,
+    ...(ci?{"Premium Collected":num(x.premiumCollected),Commission:num(x.commission),Brokerage:num(x.brokerage)}:{}),...(cp?{"Payout to RM":num(x.payoutRM)}:{}),...(ci?{"Net Income":num(x.netIncome)}:{}),
+    "Payment Method":x.payMethod||"","Payment Ref":x.payRef||""})),lobFile("Income_Payout"));
+}
+function xlsxDownload(rows,name){
+  if(!rows.length) return toast("Nothing to export.","wa");
+  const ws=XLSX.utils.json_to_sheet(rows); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,name.slice(0,31));
+  XLSX.writeFile(wb,`${(S.settings.branding.name||"Export").replace(/[^\w]+/g,"_")}_${name}_${today()}.xlsx`);
+  logAct("export",name,`${rows.length} rows`); toast(`Exported ${rows.length.toLocaleString("en-IN")} rows.`,"ok");
+}
+
+/* ================================ USERS & PERMISSIONS ================================ */
+function renderUsers(){
+  const el=$("#pg-users"); if(!can("canManageUsers")) return;
+  const users=[...S.users].sort((a,b)=>(a.role==="master"?-1:b.role==="master"?1:0)||String(a.name).localeCompare(String(b.name)));
+  el.innerHTML=`
+  <div class="ph"><div><h2>Users &amp; Permissions</h2><p>Toggles apply instantly — the user's screen updates within seconds.</p></div><div class="ph-a"><button class="btn o" id="uAdd">${I("plus")}Add User</button></div></div>
+  <div class="card p0"><div class="tw"><table class="tbl perm"><thead><tr><th style="min-width:220px">User</th><th class="c">Active</th>${PERMS.map(p=>`<th class="c">${p[1]}</th>`).join("")}<th class="r">Actions</th></tr></thead>
+  <tbody>${users.length?users.map(u=>{ const lock=u.role==="master"||u.id===S.user.uid&&!isMaster(); const self=u.id===S.user.uid;
+    return `<tr data-u="${u.id}"><td class="nm"><div style="display:flex;gap:10px;align-items:center"><div class="av" style="width:32px;height:32px;font-size:12px;cursor:default;${u.role==="master"?"background:linear-gradient(135deg,var(--o),var(--o2))":""}">${esc(initials(u.name||u.email))}</div><div><b>${esc(u.name||"—")} ${u.role==="master"?'<span class="bd or">Master</span>':""}${self?' <span class="bd gy">You</span>':""}</b><small>${esc(u.email)}</small></div></div></td>
+      <td class="c"><label class="sw"><input type="checkbox" data-act="active" ${u.active!==false?"checked":""} ${lock||self?"disabled":""}><span></span></label></td>
+      ${PERMS.map(([k])=>`<td class="c"><label class="sw"><input type="checkbox" data-p="${k}" ${u.role==="master"||u.permissions?.[k]?"checked":""} ${lock?"disabled":""}><span></span></label></td>`).join("")}
+      <td><div class="acts">${u.role!=="master"?`<button class="btn g ic" data-a="preset" title="Apply preset">${I("shield")}</button><button class="btn g ic" data-a="name" title="Rename">${I("edit")}</button>`:""}<button class="btn g ic" data-a="reset" title="Send password reset">${I("key")}</button></div></td></tr>`; }).join(""):emptyRow(13,"Loading users…")}</tbody></table></div></div>
+  <div class="note" style="margin-top:14px"><b>Notes:</b> Disabling a user blocks access immediately (rules + auto logout). Deleting a login account itself is done in Firebase Console › Authentication. Users without “View All Policies” see only policies they created.</div>`;
+  $("#uAdd").onclick=addUserModal;
+  const tb=el.querySelector("tbody");
+  tb.onchange=async e=>{ const tr=e.target.closest("tr[data-u]"); if(!tr) return; const u=S.users.find(x=>x.id===tr.dataset.u); const c=e.target;
+    try{
+      if(c.dataset.act==="active"){ await updateDoc(doc(db,"users",u.id),{active:c.checked}); logAct("user.active",u.email,String(c.checked)); toast(`${u.name||u.email} ${c.checked?"enabled":"disabled"}.`,"ok"); }
+      if(c.dataset.p){ await updateDoc(doc(db,"users",u.id),{[`permissions.${c.dataset.p}`]:c.checked}); logAct("user.permission",u.email,`${c.dataset.p}=${c.checked}`); toast(`${PERMS.find(p=>p[0]===c.dataset.p)[1]} ${c.checked?"granted":"revoked"} for ${u.name||u.email}.`,"ok"); }
+    }catch(err){ c.checked=!c.checked; toast("Update failed: "+err.code,"er"); } };
+  tb.onclick=async e=>{ const a=e.target.closest("[data-a]")?.dataset.a; if(!a) return; const u=S.users.find(x=>x.id===e.target.closest("tr").dataset.u);
+    if(a==="reset"){ try{ await sendPasswordResetEmail(auth,u.email); toast(`Reset link sent to ${u.email}.`,"ok"); }catch(err){ toast(err.message,"er"); } }
+    if(a==="name"){ const n=await promptBox("Rename user","Full name",u.name||""); if(n){ await updateDoc(doc(db,"users",u.id),{name:n}); toast("Name updated.","ok"); } }
+    if(a==="preset"){ const m=openModal({title:`Apply preset · ${esc(u.name||u.email)}`,body:`<div style="display:flex;flex-direction:column;gap:8px">${Object.entries(PRESETS).map(([k,v])=>`<button class="btn" data-pr="${esc(k)}" style="justify-content:space-between;height:auto;padding:12px 14px"><b>${esc(k)}</b><small class="mu" style="white-space:normal;text-align:right">${v.map(x=>PERMS.find(p=>p[0]===x)[1]).join(", ")}</small></button>`).join("")}</div>`});
+      m.onclick=async ev=>{ const k=ev.target.closest("[data-pr]")?.dataset.pr; if(!k) return; await updateDoc(doc(db,"users",u.id),{permissions:Object.fromEntries(PERMS.map(([p])=>[p,PRESETS[k].includes(p)]))}); logAct("user.preset",u.email,k); toast(`Preset "${k}" applied.`,"ok"); m._close(true); }; } };
+}
+function addUserModal(){
+  const m=openModal({title:"Add User",body:`<div style="display:flex;flex-direction:column;gap:14px">
+    <label class="f">Full name<input class="in" id="nuName"></label>
+    <label class="f">Email (login ID)<input class="in" id="nuEmail" type="email"></label>
+    <label class="f">Temporary password (min 6 chars)<input class="in" id="nuPass" value="${rid()}A1"></label>
+    <label class="f">Preset<select class="in" id="nuPre"><option value="">Custom</option>${Object.keys(PRESETS).map(k=>`<option>${esc(k)}</option>`).join("")}</select></label>
+    <div class="fg" style="grid-template-columns:1fr 1fr">${PERMS.map(([k,l])=>`<label class="row" style="gap:8px;align-items:center;font-size:13px;font-weight:500"><span class="sw" style="flex:none"><input type="checkbox" data-np="${k}"><span></span></span>${l}</label>`).join("")}</div>
+    <div class="note">Share the email and temporary password with the user, or click the key icon later to email them a reset link.</div></div>`,
+    footer:`<button class="btn" data-c>Cancel</button><button class="btn p" id="nuSave">${I("check")}Create User</button>`});
+  m.querySelector("[data-c]").onclick=()=>m._close(true);
+  $("#nuPre",m).onchange=e=>{ const pr=PRESETS[e.target.value]||[]; $$("[data-np]",m).forEach(c=>c.checked=pr.includes(c.dataset.np)); };
+  $("#nuSave",m).onclick=async()=>{
+    const name=$("#nuName",m).value.trim(), email=$("#nuEmail",m).value.trim(), pass=$("#nuPass",m).value;
+    if(!name||!email||pass.length<6) return toast("Name, email and a 6+ character password are required.","er");
+    const perms=Object.fromEntries($$("[data-np]",m).map(c=>[c.dataset.np,c.checked]));
+    if(!isMaster()) perms.canManageUsers=false;
+    const btn=$("#nuSave",m); btn.disabled=true; btn.innerHTML='<div class="spin"></div> Creating…';
+    const sec=initializeApp(firebaseConfig,"sec-"+Date.now()); const sa=getAuth(sec);
+    try{
+      const cred=await createUserWithEmailAndPassword(sa,email,pass);
+      await setDoc(doc(db,"users",cred.user.uid),{email,name,role:"user",active:true,permissions:perms,createdAt:serverTimestamp(),createdBy:S.user.uid});
+      await signOut(sa); logAct("user.create",email,name); toast(`User ${name} created.`,"ok"); m._close(true);
+    }catch(e){ toast(e.code==="auth/email-already-in-use"?"That email already has an account.":e.message,"er"); btn.disabled=false; btn.innerHTML=`${I("check")}Create User`; }
+    finally{ deleteApp(sec).catch(()=>{}); }
+  };
+}
+
+/* ================================ SETTINGS ================================ */
+const STAB={t:"branding",planComp:""};
+async function saveSettings(patch){ try{ await setDoc(doc(db,"settings","main"),patch,{merge:true}); logAct("settings.update",Object.keys(patch).join(",")); }catch(e){ toast("Settings save failed: "+e.code,"er"); throw e; } }
+function renderSettings(){
+  const el=$("#pg-settings"); if(!can("canManageSettings")) return; const s=S.settings, b=s.branding;
+  const tabs=[["branding","Branding"],["companies","Companies"],["plans","Plans"],["rms","RMs"],["lists","Dropdowns"],["log","Activity Log"],["data","Data"]];
+  let body="";
+  if(STAB.t==="branding") body=`<div class="g2"><div class="card"><div class="ch"><h3>Company details</h3><span class="mu" style="font-size:12px">Auto-saves on change</span></div><div class="fg" style="grid-template-columns:1fr 1fr">
+      <label class="f">Company name<input class="in" data-b="name" value="${esc(b.name)}"></label><label class="f">Tagline<input class="in" data-b="tagline" value="${esc(b.tagline)}"></label>
+      <label class="f">Phone<input class="in" data-b="phone" value="${esc(b.phone)}"></label><label class="f">Email<input class="in" data-b="email" value="${esc(b.email)}"></label>
+      <label class="f w2">Address<textarea class="in" data-b="address">${esc(b.address)}</textarea></label></div></div>
+    <div class="card"><div class="ch"><h3>Logo</h3></div><div class="logo-prev">${b.logo?`<img src="${esc(b.logo)}">`:`<span class="mu">No logo</span>`}</div>
+      <div class="row" style="justify-content:flex-start"><button class="btn p" id="lgUp">${I("upload")}Upload logo</button>${b.logo?`<button class="btn d" id="lgRm">Remove</button>`:""}</div><p class="mu" style="font-size:12px;margin-top:8px">Wide logos are shown full width in the side menu and login page. PNG/WebP with a transparent or white background works best.</p>
+      <div class="ch" style="margin-top:18px"><h3>Square icon <span class="mu" style="font-weight:500">(optional)</span></h3></div>
+      <div class="row" style="justify-content:flex-start;align-items:center"><div class="icon-prev" style="flex:none;min-width:0">${b.icon?`<img src="${esc(b.icon)}">`:esc(initials(b.name))}</div><button class="btn" id="icUp" style="flex:none">${I("upload")}Upload icon</button>${b.icon?`<button class="btn d" id="icRm" style="flex:none">Remove</button>`:""}</div>
+      <p class="mu" style="font-size:12px;margin-top:8px">Shown when the side menu is collapsed. Leave empty to show initials.</p></div></div>`;
+  if(STAB.t==="companies") body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">New insurance company<input class="in" id="coNew" placeholder="e.g. HDFC Life"></label><button class="btn o" id="coAdd">${I("plus")}Add</button></div>
+    <div class="co-grid">${s.companies.map(c=>`<div class="co" data-id="${c.id}">${c.logo?`<img src="${esc(c.logo)}">`:`<div class="ini">${esc(initials(c.name))}</div>`}<input class="in" data-coname value="${esc(c.name)}"><button class="btn g ic" data-a="logo" title="Logo">${I("upload")}</button><button class="btn g ic d" data-a="del" title="Delete">${I("trash")}</button></div>`).join("")||`<div class="mu">No companies yet.</div>`}</div>
+    <p class="mu" style="font-size:12px;margin-top:12px">Renaming a company does not change existing policy records.</p></div>`;
+  if(STAB.t==="plans"){ const list=s.plans.filter(p=>!STAB.planComp||p.company===STAB.planComp);
+    body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">Company<select class="in" id="plCo">${s.companies.map(c=>`<option ${c.name===STAB.planComp?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label>
+      <label class="f">Category<select class="in" id="plCat">${s.categories.map(c=>`<option>${esc(c)}</option>`).join("")}</select></label><label class="f">Plan / policy name<input class="in" id="plName"></label><button class="btn o" id="plAdd">${I("plus")}Add</button></div>
+      <div class="row" style="margin-bottom:10px;justify-content:flex-start"><label class="f" style="max-width:280px">Filter by company<select class="in" id="plFilter"><option value="">All</option>${s.companies.map(c=>`<option ${c.name===STAB.planComp?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label></div>
+      <div class="tw"><table class="tbl"><thead><tr><th>Plan</th><th>Company</th><th>Category</th><th></th></tr></thead><tbody>${list.map(p=>`<tr data-id="${p.id}"><td><b>${esc(p.name)}</b></td><td>${esc(p.company)}</td><td>${catBadge(p.category)}</td><td class="r"><button class="btn g ic d" data-a="del">${I("trash")}</button></td></tr>`).join("")||emptyRow(4,"No plans")}</tbody></table></div></div>`; }
+  if(STAB.t==="rms") body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">RM name<input class="in" id="rmN"></label><label class="f">RM code<input class="in" id="rmC"></label>
+      <label class="f">Branch<select class="in" id="rmB">${s.branches.map(x=>`<option>${esc(x)}</option>`).join("")}</select></label><label class="f">Default commission %<input class="in" id="rmP" type="number" step="any"></label><button class="btn o" id="rmAdd">${I("plus")}Add</button></div>
+    <div class="tw"><table class="tbl"><thead><tr><th>Name</th><th>Code</th><th>Branch</th><th>Comm. %</th><th></th></tr></thead><tbody>${s.rms.map(r=>`<tr data-id="${r.id}"><td><input class="in" data-rf="name" value="${esc(r.name)}"></td><td><input class="in" data-rf="code" value="${esc(r.code)}"></td>
+      <td><select class="in" data-rf="branch">${[...new Set([r.branch,...s.branches].filter(Boolean))].map(x=>`<option ${x===r.branch?"selected":""}>${esc(x)}</option>`).join("")}</select></td><td><input class="in" type="number" step="any" data-rf="commPct" value="${esc(r.commPct)}"></td><td class="r"><button class="btn g ic d" data-a="del">${I("trash")}</button></td></tr>`).join("")||emptyRow(5,"No RMs yet")}</tbody></table></div></div>`;
+  if(STAB.t==="lists") body=`<div class="g2e" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">${Object.entries(LIST_LABELS).map(([k,l])=>`<div class="card" data-list="${k}"><div class="ch"><h3>${l}</h3></div>
+      <div class="chips" style="margin-bottom:12px">${(s[k]||[]).map((v,i)=>`<span class="chip">${esc(v)}<button data-rmi="${i}">×</button></span>`).join("")}</div>
+      <div class="row"><input class="in" placeholder="Add option…" data-addl><button class="btn sm p" data-addb>${I("plus")}</button></div>
+      ${k==="categories"?'<p class="mu" style="font-size:12px;margin-top:8px">“Motor” shows vehicle fields.</p>':k==="statuses"?'<p class="mu" style="font-size:12px;margin-top:8px">Only “Active” policies get renewal alerts.</p>':k==="frequencies"?'<p class="mu" style="font-size:12px;margin-top:8px">Yearly, Half-Yearly, Quarterly, Monthly, Single drive auto renewal dates; others default to 12 months.</p>':""}</div>`).join("")}</div>`;
+  if(STAB.t==="log") body=`<div class="card p0"><div class="tw"><table class="tbl"><thead><tr><th>When</th><th>User</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody id="logBody">${emptyRow(5,"Loading…")}</tbody></table></div></div>`;
+  if(STAB.t==="data") body=`<div class="card"><div class="ch"><h3>Local cache &amp; sync</h3></div><p class="mu" style="line-height:1.6;margin-bottom:14px">Records are cached in this browser and only changes are downloaded, keeping Firestore reads low. Cached now: <b>${Object.keys(S.policies).length.toLocaleString("en-IN")}</b> policies, <b>${Object.keys(S.income).length.toLocaleString("en-IN")}</b> income records.</p>
+    <div class="row" style="justify-content:flex-start"><button class="btn" id="dResync">${I("refresh")}Resync everything from server</button><button class="btn" id="dDraft">Clear local drafts</button></div></div>`;
+  el.innerHTML=`<div class="ph"><div><h2>Settings</h2><p>Companies, plans, RMs, dropdowns and branding — saved to Firestore and applied everywhere.</p></div></div>
+    <div class="tabs">${tabs.map(([k,l])=>`<button class="tab ${STAB.t===k?"on":""}" data-t="${k}">${l}</button>`).join("")}</div>${body}`;
+  el.querySelector(".tabs").onclick=e=>{ const t=e.target.closest("[data-t]")?.dataset.t; if(t){ STAB.t=t; renderSettings(); } };
+  const pickImg=(cb,max=256,type="image/png")=>{ const i=document.createElement("input"); i.type="file"; i.accept="image/*"; i.onchange=async()=>i.files[0]&&cb(await imgToSmallDataURL(i.files[0],max,type)); i.click(); };
+  // branding
+  $$("[data-b]",el).forEach(inp=>inp.onchange=()=>saveSettings({branding:{...b,[inp.dataset.b]:inp.value.trim()}}).then(()=>toast("Saved.","ok")));
+  $("#lgUp")&&($("#lgUp").onclick=()=>pickImg(d=>saveSettings({branding:{...b,logo:d}}),720,"image/webp"));
+  $("#icUp")&&($("#icUp").onclick=()=>pickImg(d=>saveSettings({branding:{...b,icon:d}}),160));
+  $("#icRm")&&($("#icRm").onclick=()=>saveSettings({branding:{...b,icon:""}}));
+  $("#lgRm")&&($("#lgRm").onclick=()=>saveSettings({branding:{...b,logo:""}}));
+  // companies
+  if(STAB.t==="companies"){
+    const add=()=>{ const n=$("#coNew").value.trim(); if(!n) return; if(s.companies.some(c=>c.name.toLowerCase()===n.toLowerCase())) return toast("Company already exists.","wa"); saveSettings({companies:[...s.companies,{id:rid(),name:n,logo:""}]}); };
+    $("#coAdd").onclick=add; $("#coNew").onkeydown=e=>{ if(e.key==="Enter") add(); };
+    el.querySelector(".co-grid").onclick=async e=>{ const a=e.target.closest("[data-a]")?.dataset.a; if(!a) return; const id=e.target.closest(".co").dataset.id;
+      if(a==="logo") pickImg(d=>saveSettings({companies:s.companies.map(c=>c.id===id?{...c,logo:d}:c)}));
+      if(a==="del"&&await confirmBox("Delete this company from the dropdown? Existing policies are not affected.","Delete",true)) saveSettings({companies:s.companies.filter(c=>c.id!==id)}); };
+    el.querySelector(".co-grid").onchange=e=>{ if(e.target.dataset.coname===undefined) return; const id=e.target.closest(".co").dataset.id; const n=e.target.value.trim(); if(n) saveSettings({companies:s.companies.map(c=>c.id===id?{...c,name:n}:c)}); };
+  }
+  if(STAB.t==="plans"){
+    const add=()=>{ const n=$("#plName").value.trim(), co=$("#plCo").value, cat=$("#plCat").value; if(!n||!co) return toast("Add a company first and enter a plan name.","er"); STAB.planComp=co; saveSettings({plans:[...s.plans,{id:rid(),company:co,category:cat,name:n}]}); };
+    $("#plAdd").onclick=add; $("#plName").onkeydown=e=>{ if(e.key==="Enter") add(); };
+    $("#plFilter").onchange=e=>{ STAB.planComp=e.target.value; renderSettings(); };
+    el.querySelector("tbody").onclick=e=>{ if(e.target.closest("[data-a=del]")){ const id=e.target.closest("tr").dataset.id; saveSettings({plans:s.plans.filter(p=>p.id!==id)}); } };
+  }
+  if(STAB.t==="rms"){
+    $("#rmAdd").onclick=()=>{ const n=$("#rmN").value.trim(); if(!n) return toast("RM name required.","er"); saveSettings({rms:[...s.rms,{id:rid(),name:n,code:$("#rmC").value.trim(),branch:$("#rmB").value,commPct:$("#rmP").value===""?"":num($("#rmP").value)}]}); };
+    const tb=el.querySelector("tbody");
+    tb.onchange=e=>{ const f=e.target.dataset.rf; if(!f) return; const id=e.target.closest("tr").dataset.id; const v=f==="commPct"?(e.target.value===""?"":num(e.target.value)):e.target.value.trim(); saveSettings({rms:s.rms.map(r=>r.id===id?{...r,[f]:v}:r)}).then(()=>toast("RM updated.","ok")); };
+    tb.onclick=async e=>{ if(e.target.closest("[data-a=del]")&&await confirmBox("Remove this RM from the dropdown?","Remove",true)){ const id=e.target.closest("tr").dataset.id; saveSettings({rms:s.rms.filter(r=>r.id!==id)}); } };
+  }
+  if(STAB.t==="lists"){
+    $$("[data-list]",el).forEach(card=>{ const k=card.dataset.list; const inp=card.querySelector("[data-addl]");
+      const add=()=>{ const v=inp.value.trim(); if(!v) return; if((s[k]||[]).includes(v)) return toast("Already exists.","wa"); saveSettings({[k]:[...(s[k]||[]),v]}); };
+      card.querySelector("[data-addb]").onclick=add; inp.onkeydown=e=>{ if(e.key==="Enter") add(); };
+      card.querySelector(".chips").onclick=e=>{ const i=e.target.dataset.rmi; if(i!==undefined) saveSettings({[k]:(s[k]||[]).filter((_,j)=>j!==+i)}); }; });
+  }
+  if(STAB.t==="log") getDocs(query(collection(db,"activityLog"),orderBy("at","desc"),limit(300))).then(snap=>{
+    $("#logBody").innerHTML=snap.docs.map(d=>{ const x=d.data(); return `<tr><td>${fmtTs(x.at?.toMillis?.())}</td><td>${esc(x.name)}</td><td><span class="bd bl">${esc(x.action)}</span></td><td>${esc(x.target)}</td><td class="mu">${esc(x.details)}</td></tr>`; }).join("")||emptyRow(5,"No activity yet.");
+  }).catch(e=>$("#logBody").innerHTML=emptyRow(5,"Could not load: "+e.code));
+  if(STAB.t==="data"){
+    $("#dResync").onclick=async()=>{ if(await confirmBox("Clear the local cache and download all records again? (Uses Firestore reads.)","Resync")){ await IDB.clear(); location.reload(); } };
+    $("#dDraft").onclick=()=>{ Object.keys(localStorage).filter(k=>k.startsWith("ib_draft:")).forEach(k=>localStorage.removeItem(k)); toast("Drafts cleared.","ok"); };
+  }
+}
+
+window.addEventListener("keydown",e=>{ if(e.key==="Escape"){ const m=$$(".mb").pop(); if(m) m._close(); closeDD(); } });
+</script>
+<script>
+/* Loading watchdog: if the app script can't start (opened as a file, offline, or blocked), explain instead of spinning forever */
+(function(){
+  function show(title,msg){ var l=document.getElementById("loader"); if(!l) return;
+    l.innerHTML='<div style="max-width:420px;padding:24px;text-align:center;font-family:Inter,system-ui,sans-serif;line-height:1.55">'+
+      '<div style="font-size:40px;margin-bottom:8px">⚠️</div><h3 style="font-size:18px;margin-bottom:8px">'+title+'</h3>'+
+      '<p style="color:#6B7280;font-size:14px">'+msg+'</p>'+
+      '<button onclick="location.reload()" style="margin-top:16px;height:40px;padding:0 18px;border:0;border-radius:10px;background:#2563EB;color:#fff;font-weight:600">Retry</button></div>'; }
+  if(location.protocol==="file:" || location.protocol==="content:"){
+    show("Open this from your website link","This page was opened as a file. Login and data only work when it is opened from its web address (e.g. https://yourname.github.io/…), not from a file manager, WhatsApp or Drive preview.");
+    return; }
+  setTimeout(function(){ if(!window.__ibStarted) show("Couldn't load the app","Check your internet connection and try again. If it keeps happening, open the link in Chrome (not inside WhatsApp or another app's browser)."); },10000);
+})();
+</script>
+</body>
+</html>
