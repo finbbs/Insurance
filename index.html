@@ -499,7 +499,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
                         closure:{type,date,amount,ref,note,claimId}, paidUp:{date,value}
    public/branding    { name, tagline, logo, phone, email }   — shown on the login page (public read)
    private/ocr        { proxyUrl, openaiKey, model }          — OCR settings (Settings › OCR / AI, master only)
-   settings/main      companies[]: {id,name,logo,lines:["Life","Health",…],rates:{Life:%,Health:%,Motor:%},renewalPct}
+   settings/main      companies[]: {id,name,logo,lines:["Life","Health",…]}   (commission is per plan, not per company)
                       plans[]: {id,company,name,categories:[…],category(first),commPct,renewalPct}
    settings/main      fieldRules:{ <fieldKey>:{hide,req,inf} } — Settings › Form Fields; plans[].commPct / renewalPct
    activityLog/{id}   { at, uid, name, action, target, details }
@@ -1529,13 +1529,13 @@ function fillCompanies(){ const cat=val("category"); fillSel("pf_company",S.sett
 function fillPlans(){ const c=val("company"), cat=val("category");
   fillSel("pf_plan",[...new Set(S.settings.plans.filter(p=>planFor(p,c,cat)).map(p=>p.name))],val("plan"),c?"No plans for this company — add in Settings › Plans":"Select a company first"); }
 const r2 = n => Math.round(n*100)/100;
-/* Base commission %: plan (Settings › Plans) → company's rate for the line (Settings › Companies) → RM default % */
+/* Base commission %: from the plan (Settings › Plans & Commission) */
 const findPlan = (name,co,cat) => S.settings.plans.find(p=>p.name===name&&planFor(p,co,cat)) || S.settings.plans.find(p=>p.name===name&&(!co||p.company===co));
-/* Commission %: plan % → company % for that line → RM default % */
+/* Commission %: set per plan (product) in Settings › Plans; RM default % only if the plan has none */
 function rateFor(plan,co,cat,rmName){ const pl=findPlan(plan,co,cat), c=findCo(co), rm=S.settings.rms.find(x=>x.name===rmName);
-  if(pl&&filled(pl.commPct)) return pl.commPct; if(c&&c.rates&&filled(c.rates[cat])) return c.rates[cat]; if(rm&&filled(rm.commPct)) return rm.commPct; return ""; }
+  if(pl&&filled(pl.commPct)) return pl.commPct; if(rm&&filled(rm.commPct)) return rm.commPct; return ""; }
 function planRate(){ return rateFor(val("plan"),val("company"),val("category"),val("rmName")); }
-function applyRate(){ if(!M.pctManual && $("#pf_commPct")){ const r=planRate(); if(r!=="") setVal("commPct",r); } recalc("commPct"); }
+function applyRate(){ if(!M.pctManual && $("#pf_commPct")) setVal("commPct",planRate()); recalc("commPct"); }
 function recalc(src){
   if(!M) return; const cat=val("category");
   // maturity / expiry from risk start + term (Life: same date; Health/Motor: one day before)
@@ -1558,6 +1558,7 @@ function recalc(src){
   const base=val("basePremium")!==""?num(val("basePremium")):num(val("premium"));   // commission is on premium excl. GST
   const pctV=$("#pf_commPct")?val("commPct"):planRate();   // works even if "Commission %" is hidden from the form
   if(["premium","basePremium","commPct","init"].includes(src) && !M.commManual && $("#pf_commission") && pctV!=="" && base) setVal("commission",Math.round(base*num(pctV)/100));
+  else if(src==="commPct" && !M.commManual && $("#pf_commission") && pctV==="") setVal("commission","");
   if(src==="premium" && $("#pf_premiumCollected") && !$("#pf_premiumCollected").dataset.touched) setVal("premiumCollected",val("premium"));
   if(src==="premiumCollected") $("#pf_premiumCollected").dataset.touched=1;
   const payout = $("#pf_payoutRM") ? num(val("payoutRM")) : num(S.income[M?.p?.id]?.payoutRM);
@@ -1676,7 +1677,7 @@ function openPayment(p,due){
   due = due || nextDue(p);
   const fin=can("canViewIncome"), pay=can("canViewPayout");
   const base=filled(p.basePremium)?num(p.basePremium):"";
-  const pl=findPlan(p.plan,p.company,p.category), pc=findCo(p.company), renR=pl&&filled(pl.renewalPct)?num(pl.renewalPct):(pc&&filled(pc.renewalPct)?num(pc.renewalPct):"");
+  const pl=findPlan(p.plan,p.company,p.category), pc=findCo(p.company), renR=pl&&filled(pl.renewalPct)?num(pl.renewalPct):"";
   const defComm=renR!==""?Math.round((base!==""?base:num(p.premium))*renR/100):"";
   const m=openModal({title:`Record premium · ${esc(polLabel(p))}`,body:`
     <div class="note" style="margin-bottom:14px"><b>${esc(p.custName)}</b> · ${esc(p.company)} · ${esc(p.plan||"")} · ${esc(p.frequency||"")}<br><span class="mu">Same policy number — this is an instalment, not a new policy.</span></div>
@@ -2436,15 +2437,14 @@ function renderSettings(){
   if(STAB.t==="companies"){ const cats=s.categories;
     body=`<div class="card"><div class="row" style="margin-bottom:8px"><label class="f">New insurance company<input class="in" id="coNew" placeholder="e.g. United India Insurance"></label><button class="btn o" id="coAdd">${I("plus")}Add</button></div>
     <div class="row" style="justify-content:flex-start;gap:16px;margin-bottom:18px" id="coNewLines"><span class="mu" style="flex:none;min-width:0;font-size:12.5px;font-weight:600">Sells:</span>${cats.map(c=>`<label class="ck"><input type="checkbox" value="${esc(c)}"> ${esc(c)}</label>`).join("")}</div>
-    <div class="tw"><table class="tbl"><thead><tr><th>Logo</th><th>Company</th>${cats.map(c=>`<th>${esc(c)} · comm %</th>`).join("")}<th>Life renewal %</th><th class="r">Actions</th></tr></thead><tbody>
+    <div class="tw"><table class="tbl"><thead><tr><th>Logo</th><th>Company</th><th>Sells</th><th class="r">Actions</th></tr></thead><tbody>
     ${s.companies.map(co=>{ const L=coLines(co);
       return `<tr data-id="${co.id}"><td>${co.logo?`<img class="coimg" src="${esc(co.logo)}" alt="">`:`<div class="coimg">${esc(initials(co.name))}</div>`}</td>
         <td><input class="in" data-coname value="${esc(co.name)}" style="min-width:190px"></td>
-        ${cats.map(c=>{ const on=!L||L.includes(c); return `<td><div class="cr"><label class="ck" title="${esc(co.name)} sells ${esc(c)}"><input type="checkbox" data-line="${esc(c)}" ${on?"checked":""}></label><input class="in" type="number" step="any" data-rate="${esc(c)}" value="${esc(co.rates?.[c]??"")}" placeholder="%" ${on?"":"disabled"}></div></td>`; }).join("")}
-        <td><input class="in" type="number" step="any" data-ren value="${esc(co.renewalPct??"")}" placeholder="%" style="max-width:100px" ${!L||L.some(isLife)?"":"disabled"}></td>
-        <td><div class="acts"><button class="btn g ic" data-a="logo" title="Logo">${I("upload")}</button><button class="btn g ic d" data-a="del" title="Delete">${I("trash")}</button></div></td></tr>`; }).join("")||emptyRow(cats.length+4,"No companies yet")}
+        <td><div style="display:flex;gap:16px;flex-wrap:wrap">${cats.map(c=>`<label class="ck"><input type="checkbox" data-line="${esc(c)}" ${!L||L.includes(c)?"checked":""}> ${esc(c)}</label>`).join("")}</div></td>
+        <td><div class="acts"><button class="btn g ic" data-a="logo" title="Logo">${I("upload")}</button><button class="btn g ic d" data-a="del" title="Delete">${I("trash")}</button></div></td></tr>`; }).join("")||emptyRow(4,"No companies yet")}
     </tbody></table></div>
-    <p class="mu" style="font-size:12px;margin-top:12px;line-height:1.55">Tick the lines each company sells — e.g. <b>United India → Health + Motor</b>. When a Policy Type is chosen on a policy, only companies that sell it appear. <b>Comm %</b> is the default commission for that line (on premium excl. GST); a plan's own % overrides it. Renaming a company does not change existing policies.</p></div>`; }
+    <p class="mu" style="font-size:12px;margin-top:12px;line-height:1.55">Tick the lines each company sells — e.g. <b>United India → Health + Motor</b>. When a Policy Type is chosen on a policy, only companies that sell it appear. Commission is set per product in <b>Plans &amp; Commission</b>. Renaming a company does not change existing policies.</p></div>`; }
   if(STAB.t==="plans"){ const list=s.plans.filter(p=>!STAB.planComp||p.company===STAB.planComp);
     const coSel=STAB.planComp||s.companies[0]?.name||"", linesFor=co=>coLines(findCo(co))||s.categories;
     body=`<div class="card"><div class="row" style="margin-bottom:8px"><label class="f">Company<select class="in" id="plCo">${s.companies.map(c=>`<option ${c.name===coSel?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label>
@@ -2454,7 +2454,7 @@ function renderSettings(){
       <div class="tw"><table class="tbl"><thead><tr><th>Plan</th><th>Company</th><th>Line</th><th>Commission %</th><th>Renewal %</th><th></th></tr></thead><tbody>${list.map(p=>`<tr data-id="${p.id}"><td><b>${esc(p.name)}</b></td><td>${esc(p.company)}</td>
         <td><div style="display:flex;gap:12px;flex-wrap:wrap">${[...new Set([...linesFor(p.company),...planCats(p)])].map(c=>`<label class="ck"><input type="checkbox" data-pline="${esc(c)}" ${planCats(p).includes(c)?"checked":""}> ${esc(c)}</label>`).join("")}</div></td>
         <td><input class="in" style="max-width:110px" type="number" step="any" data-pf="commPct" value="${esc(p.commPct??"")}"></td><td><input class="in" style="max-width:110px" type="number" step="any" data-pf="renewalPct" value="${esc(p.renewalPct??"")}"></td><td class="r"><button class="btn g ic d" data-a="del">${I("trash")}</button></td></tr>`).join("")||emptyRow(6,"No plans")}</tbody></table></div>
-      <p class="mu" style="font-size:12px;margin-top:10px;line-height:1.55">Only plans listed here can be picked on a policy — nobody can type a new plan in the policy form. <b>Commission %</b> (on premium excl. GST) fills automatically when the plan is picked; if empty, the company's rate for that line is used. <b>Renewal %</b> is used for Life renewal instalments. Rewards / incentives are entered manually on each policy.</p></div>`; }
+      <p class="mu" style="font-size:12px;margin-top:10px;line-height:1.55">Only plans listed here can be picked on a policy — nobody can type a new plan in the policy form. <b>Commission %</b> (on premium excl. GST) fills automatically when the plan is picked on a policy. <b>Renewal %</b> is used for Life renewal instalments. Rewards / incentives are entered manually on each policy.</p></div>`; }
   if(STAB.t==="rms") body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">RM name<input class="in" id="rmN"></label><label class="f">RM code<input class="in" id="rmC"></label>
       <label class="f">Branch<select class="in" id="rmB">${s.branches.map(x=>`<option>${esc(x)}</option>`).join("")}</select></label><label class="f">Default commission %<input class="in" id="rmP" type="number" step="any"></label><button class="btn o" id="rmAdd">${I("plus")}Add</button></div>
     <div class="tw"><table class="tbl"><thead><tr><th>Name</th><th>Code</th><th>Branch</th><th>Comm. %</th><th></th></tr></thead><tbody>${s.rms.map(r=>`<tr data-id="${r.id}"><td><input class="in" data-rf="name" value="${esc(r.name)}"></td><td><input class="in" data-rf="code" value="${esc(r.code)}"></td>
