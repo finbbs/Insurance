@@ -373,6 +373,13 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .wz-info{font-size:12.5px;color:#4b5563;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:8px 10px;background:#FAFBFC;border:1px solid var(--bd);border-radius:10px}
 .bd.pu{background:#F3E8FF;color:#7C3AED}
 @media(max-width:700px){.wz-s:not(.on) span{display:none}.wz-s:not(.on){padding:4px}}
+/* checkboxes for company / plan lines */
+.ck{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.ck input{width:16px;height:16px;accent-color:var(--b2);cursor:pointer}
+.row>.ck{flex:none;min-width:0}
+.cr{display:flex;align-items:center;gap:8px}
+.cr .in{max-width:90px;height:34px}
+.coimg{width:40px;height:40px;object-fit:contain;border-radius:8px;background:#f4f6fa;display:grid;place-items:center;font-weight:800;color:var(--b)}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
 @keyframes slide{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
@@ -492,6 +499,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
                         closure:{type,date,amount,ref,note,claimId}, paidUp:{date,value}
    public/branding    { name, tagline, logo, phone, email }   — shown on the login page (public read)
    private/ocr        { proxyUrl, openaiKey, model }          — OCR settings (Settings › OCR / AI, master only)
+   settings/main      companies[]: {id,name,logo,lines:["Life","Health",…],rates:{Life:%,Health:%,Motor:%},renewalPct}
+                      plans[]: {id,company,name,categories:[…],category(first),commPct,renewalPct}
    settings/main      fieldRules:{ <fieldKey>:{hide,req,inf} } — Settings › Form Fields; plans[].commPct / renewalPct
    activityLog/{id}   { at, uid, name, action, target, details }
 
@@ -676,7 +685,7 @@ const F = [
   {s:"s1",k:"bizType",l:"Business Type",t:"select",o:()=>BIZ_TYPES},
   {s:"s1",k:"company",l:"Insurance Company",t:"select",o:()=>S.settings.companies.map(c=>c.name),req:1,inf:1},
   {s:"s1",k:"category",l:"Policy Type",t:"select",o:()=>S.settings.categories,req:1,inf:1},
-  {s:"s1",k:"plan",l:"Plan / Policy Name",t:"list"},
+  {s:"s1",k:"plan",l:"Plan / Policy Name",t:"select",o:()=>[]},   // options filled from Settings › Plans (company + type)
   {s:"s1",k:"custName",l:"Customer Full Name",req:1,inf:1},
   {s:"s1",k:"phone",l:"Phone",t:"tel"},
   {s:"s1",k:"pan",l:"PAN No."},
@@ -1302,7 +1311,7 @@ function renderPolicies(){
       <div class="tbar">
         <div class="srch">${I("search")}<input class="in" id="pQ" placeholder="Search policy no, customer, phone, ${isMotor(S.lob)?"vehicle, engine, chassis":"vehicle"}…" value="${esc(PT.q)}"></div>
         ${S.lob==="All"?`<select class="in" id="pCat"><option value="">All types</option>${opt(S.settings.categories,PT.cat)}</select>`:""}
-        <select class="in" id="pComp"><option value="">All companies</option>${opt(S.settings.companies.map(c=>c.name),PT.comp)}</select>
+        <select class="in" id="pComp"><option value="">All companies</option>${opt(S.settings.companies.filter(c=>S.lob==="All"||offers(c,S.lob)).map(c=>c.name),PT.comp)}</select>
         <select class="in" id="pSt"><option value="">All status</option><option value="__open" ${PT.status==="__open"?"selected":""}>In force (not closed)</option><option value="__closed" ${PT.status==="__closed"?"selected":""}>Closed (all)</option>${S.settings.statuses.map(o=>`<option value="${esc(o)}" ${o===PT.status?"selected":""}>${esc(stLabel(o))}</option>`).join("")}</select>
         <select class="in" id="pRm"><option value="">All RMs</option>${opt(S.settings.rms.map(r=>r.name),PT.rm)}</select>
         <button class="btn g sm" id="pClr">Clear</button>
@@ -1450,7 +1459,7 @@ function openPolicy(mode,p={},step=0){
     $$(".js-only-motor",m).forEach(x=>x.classList.toggle("hidden",!isMotor(c)));
     $$(".js-only-health",m).forEach(x=>x.classList.toggle("hidden",!isHealth(c)));
     wzRender(); };
-  M.refresh(); fillPlans(); renderDocLists();
+  M.refresh(); fillCompanies(); fillPlans(); renderDocLists();
   if(!ro){
     const saveDraft=debounce(()=>{ if(!M?.dk) return; try{ localStorage.setItem(M.dk,JSON.stringify(collect())); $("#saveState",m)&&($("#saveState",m).textContent="Draft saved "+new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})); }catch{} },400);
     const wzLater=debounce(()=>wzRender(),200);
@@ -1463,7 +1472,8 @@ function openPolicy(mode,p={},step=0){
       if(n==="basePremium") M.baseTouched=!!e.target.value;
       recalc(n); saveDraft(); wzLater(); });
     form.addEventListener("change",e=>{ const n=e.target.name; M.dirty=true;
-      if(n==="category"){ M.refresh(); fillPlans(); } if(n==="company") fillPlans();
+      if(n==="category"){ const co=findCo(val("company")); if(co&&!offers(co,val("category"))){ setVal("company",""); setVal("plan",""); } M.refresh(); fillCompanies(); fillPlans(); }
+      if(n==="company"){ if(val("plan")&&!S.settings.plans.some(p=>p.name===val("plan")&&planFor(p,val("company"),val("category")))) setVal("plan",""); fillPlans(); }
       if(n==="rmName"){ const r=S.settings.rms.find(x=>x.name===e.target.value); if(r){ setVal("rmCode",r.code||""); setVal("branch",r.branch||""); } }
       if(["rmName","plan","company","category"].includes(n)) applyRate();
       recalc(n); saveDraft(); wzRender(); });
@@ -1503,15 +1513,28 @@ function setVal(k,v,mark){
   if(e.tagName==="SELECT" && v!=="" && v!=null && ![...e.options].some(o=>o.value===String(v))){ const o=document.createElement("option"); o.value=v; o.textContent=k==="status"?stLabel(v):v; e.appendChild(o); }
   e.value=v??""; if(mark) e.classList.add("filled");
 }
-function fillPlans(){
-  const dl=$("#dl_plan"); if(!dl) return; const c=val("company"), cat=val("category");
-  dl.innerHTML=S.settings.plans.filter(p=>(!c||p.company===c)&&(!cat||p.category===cat)).map(p=>`<option value="${esc(p.name)}">`).join("");
+/* Companies & plans are line-specific (Settings › Companies / Plans):
+   company.lines = ["Health","Motor"] (empty = all lines, for older data) · plan.categories = ["Life"] */
+const coLines = c => (c && Array.isArray(c.lines) && c.lines.length) ? c.lines : null;
+const offers = (c,cat) => !cat || !coLines(c) || coLines(c).includes(cat);
+const planCats = p => Array.isArray(p.categories)&&p.categories.length ? p.categories : (p.category?[p.category]:[]);
+const planFor = (p,co,cat) => (!co||p.company===co) && (!cat||!planCats(p).length||planCats(p).includes(cat));
+const findCo = name => S.settings.companies.find(c=>c.name===name);
+function fillSel(id,opts,cur,emptyTxt){
+  const e=$("#"+id); if(!e) return; const extra=cur&&!opts.includes(cur);
+  e.innerHTML=`<option value="">${esc(opts.length?"Select…":emptyTxt)}</option>${opts.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join("")}${extra?`<option value="${esc(cur)}">${esc(cur)} (not in list)</option>`:""}`;
+  e.value=cur||"";
 }
+function fillCompanies(){ const cat=val("category"); fillSel("pf_company",S.settings.companies.filter(c=>offers(c,cat)).map(c=>c.name),val("company"),`No ${cat||""} companies — add in Settings › Companies`); }
+function fillPlans(){ const c=val("company"), cat=val("category");
+  fillSel("pf_plan",[...new Set(S.settings.plans.filter(p=>planFor(p,c,cat)).map(p=>p.name))],val("plan"),c?"No plans for this company — add in Settings › Plans":"Select a company first"); }
 const r2 = n => Math.round(n*100)/100;
-/* Base commission % comes from the plan (Settings › Plans); if the plan has none, from the RM's default % */
-const findPlan = (name,co,cat) => S.settings.plans.find(p=>p.name===name&&(!co||p.company===co)&&(!cat||!p.category||p.category===cat)) || S.settings.plans.find(p=>p.name===name&&(!co||p.company===co));
-function planRate(){ const pl=findPlan(val("plan"),val("company"),val("category")); const rm=S.settings.rms.find(x=>x.name===val("rmName"));
-  return pl&&filled(pl.commPct)?pl.commPct:(rm&&filled(rm.commPct)?rm.commPct:""); }
+/* Base commission %: plan (Settings › Plans) → company's rate for the line (Settings › Companies) → RM default % */
+const findPlan = (name,co,cat) => S.settings.plans.find(p=>p.name===name&&planFor(p,co,cat)) || S.settings.plans.find(p=>p.name===name&&(!co||p.company===co));
+/* Commission %: plan % → company % for that line → RM default % */
+function rateFor(plan,co,cat,rmName){ const pl=findPlan(plan,co,cat), c=findCo(co), rm=S.settings.rms.find(x=>x.name===rmName);
+  if(pl&&filled(pl.commPct)) return pl.commPct; if(c&&c.rates&&filled(c.rates[cat])) return c.rates[cat]; if(rm&&filled(rm.commPct)) return rm.commPct; return ""; }
+function planRate(){ return rateFor(val("plan"),val("company"),val("category"),val("rmName")); }
 function applyRate(){ if(!M.pctManual && $("#pf_commPct")){ const r=planRate(); if(r!=="") setVal("commPct",r); } recalc("commPct"); }
 function recalc(src){
   if(!M) return; const cat=val("category");
@@ -1653,7 +1676,7 @@ function openPayment(p,due){
   due = due || nextDue(p);
   const fin=can("canViewIncome"), pay=can("canViewPayout");
   const base=filled(p.basePremium)?num(p.basePremium):"";
-  const pl=findPlan(p.plan,p.company,p.category), renR=pl&&filled(pl.renewalPct)?num(pl.renewalPct):"";
+  const pl=findPlan(p.plan,p.company,p.category), pc=findCo(p.company), renR=pl&&filled(pl.renewalPct)?num(pl.renewalPct):(pc&&filled(pc.renewalPct)?num(pc.renewalPct):"");
   const defComm=renR!==""?Math.round((base!==""?base:num(p.premium))*renR/100):"";
   const m=openModal({title:`Record premium · ${esc(polLabel(p))}`,body:`
     <div class="note" style="margin-bottom:14px"><b>${esc(p.custName)}</b> · ${esc(p.company)} · ${esc(p.plan||"")} · ${esc(p.frequency||"")}<br><span class="mu">Same policy number — this is an instalment, not a new policy.</span></div>
@@ -1798,10 +1821,12 @@ async function doOCR(file){
       if(f.t==="number") v=num(v);
       if(k==="company"){ const c=S.settings.companies.find(c=>c.name.toLowerCase()===String(v).toLowerCase()||String(v).toLowerCase().includes(c.name.toLowerCase())||c.name.toLowerCase().includes(String(v).toLowerCase())); if(c) v=c.name; }
       if(f.t==="select"){ const o=(f.o?.()||[]).find(x=>x.toLowerCase()===String(v).toLowerCase()); if(o) v=o; }
+      if(k==="company" && !findCo(v)) continue;   // only companies from Settings
+      if(k==="plan"){ const pn=S.settings.plans.find(p=>p.name.toLowerCase()===String(v).toLowerCase()); if(!pn) continue; v=pn.name; }
       setVal(k,v,true); n++;
     }
     M.refresh&&M.refresh();
-    fillPlans(); recalc("init"); recalc("premium"); M.dirty=true;
+    fillCompanies(); fillPlans(); applyRate(); recalc("init"); recalc("premium"); M.dirty=true;
     M.pending.push({type:"Policy PDF",file}); renderDocLists();
     toast(n?`OCR filled ${n} fields — highlighted in orange. Please verify.`:"OCR finished but found no fields.","ok");
     logAct("ocr.scan",file.name,`${n} fields`);
@@ -2291,8 +2316,10 @@ async function runImport(){
     if(BU.addSettings&&can("canManageSettings")){
       const s=S.settings; const cos=[...s.companies], plans=[...s.plans], rms=[...s.rms]; let ch=false;
       rows.forEach(o=>{
-        if(o.company&&!cos.some(c=>c.name===o.company)){ cos.push({id:rid(),name:o.company,logo:""}); ch=true; }
-        if(o.plan&&o.company&&!plans.some(p=>p.name===o.plan&&p.company===o.company&&p.category===(o.category||""))){ plans.push({id:rid(),company:o.company,category:o.category||"",name:o.plan}); ch=true; }
+        const ec=cos.find(c=>c.name===o.company);
+        if(o.company&&!ec){ cos.push({id:rid(),name:o.company,logo:"",lines:[o.category].filter(Boolean),rates:{}}); ch=true; }
+        else if(ec&&o.category&&coLines(ec)&&!coLines(ec).includes(o.category)){ const i=cos.indexOf(ec); cos[i]={...ec,lines:[...coLines(ec),o.category]}; ch=true; }
+        if(o.plan&&o.company&&!plans.some(p=>p.name===o.plan&&p.company===o.company&&planFor(p,o.company,o.category))){ plans.push({id:rid(),company:o.company,category:o.category||"",categories:[o.category].filter(Boolean),name:o.plan}); ch=true; }
         if(o.rmName&&!rms.some(r=>r.name===o.rmName)){ rms.push({id:rid(),name:o.rmName,code:o.rmCode||"",branch:o.branch||"",commPct:o.commPct??""}); ch=true; } });
       if(ch) await saveSettings({companies:cos,plans,rms});
     }
@@ -2406,14 +2433,28 @@ function renderSettings(){
       <div class="ch" style="margin-top:18px"><h3>Square icon <span class="mu" style="font-weight:500">(optional)</span></h3></div>
       <div class="row" style="justify-content:flex-start;align-items:center"><div class="icon-prev" style="flex:none;min-width:0">${b.icon?`<img src="${esc(b.icon)}">`:esc(initials(b.name))}</div><button class="btn" id="icUp" style="flex:none">${I("upload")}Upload icon</button>${b.icon?`<button class="btn d" id="icRm" style="flex:none">Remove</button>`:""}</div>
       <p class="mu" style="font-size:12px;margin-top:8px">Shown when the side menu is collapsed. Leave empty to show initials.</p></div></div>`;
-  if(STAB.t==="companies") body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">New insurance company<input class="in" id="coNew" placeholder="e.g. HDFC Life"></label><button class="btn o" id="coAdd">${I("plus")}Add</button></div>
-    <div class="co-grid">${s.companies.map(c=>`<div class="co" data-id="${c.id}">${c.logo?`<img src="${esc(c.logo)}">`:`<div class="ini">${esc(initials(c.name))}</div>`}<input class="in" data-coname value="${esc(c.name)}"><button class="btn g ic" data-a="logo" title="Logo">${I("upload")}</button><button class="btn g ic d" data-a="del" title="Delete">${I("trash")}</button></div>`).join("")||`<div class="mu">No companies yet.</div>`}</div>
-    <p class="mu" style="font-size:12px;margin-top:12px">Renaming a company does not change existing policy records.</p></div>`;
+  if(STAB.t==="companies"){ const cats=s.categories;
+    body=`<div class="card"><div class="row" style="margin-bottom:8px"><label class="f">New insurance company<input class="in" id="coNew" placeholder="e.g. United India Insurance"></label><button class="btn o" id="coAdd">${I("plus")}Add</button></div>
+    <div class="row" style="justify-content:flex-start;gap:16px;margin-bottom:18px" id="coNewLines"><span class="mu" style="flex:none;min-width:0;font-size:12.5px;font-weight:600">Sells:</span>${cats.map(c=>`<label class="ck"><input type="checkbox" value="${esc(c)}"> ${esc(c)}</label>`).join("")}</div>
+    <div class="tw"><table class="tbl"><thead><tr><th>Logo</th><th>Company</th>${cats.map(c=>`<th>${esc(c)} · comm %</th>`).join("")}<th>Life renewal %</th><th class="r">Actions</th></tr></thead><tbody>
+    ${s.companies.map(co=>{ const L=coLines(co);
+      return `<tr data-id="${co.id}"><td>${co.logo?`<img class="coimg" src="${esc(co.logo)}" alt="">`:`<div class="coimg">${esc(initials(co.name))}</div>`}</td>
+        <td><input class="in" data-coname value="${esc(co.name)}" style="min-width:190px"></td>
+        ${cats.map(c=>{ const on=!L||L.includes(c); return `<td><div class="cr"><label class="ck" title="${esc(co.name)} sells ${esc(c)}"><input type="checkbox" data-line="${esc(c)}" ${on?"checked":""}></label><input class="in" type="number" step="any" data-rate="${esc(c)}" value="${esc(co.rates?.[c]??"")}" placeholder="%" ${on?"":"disabled"}></div></td>`; }).join("")}
+        <td><input class="in" type="number" step="any" data-ren value="${esc(co.renewalPct??"")}" placeholder="%" style="max-width:100px" ${!L||L.some(isLife)?"":"disabled"}></td>
+        <td><div class="acts"><button class="btn g ic" data-a="logo" title="Logo">${I("upload")}</button><button class="btn g ic d" data-a="del" title="Delete">${I("trash")}</button></div></td></tr>`; }).join("")||emptyRow(cats.length+4,"No companies yet")}
+    </tbody></table></div>
+    <p class="mu" style="font-size:12px;margin-top:12px;line-height:1.55">Tick the lines each company sells — e.g. <b>United India → Health + Motor</b>. When a Policy Type is chosen on a policy, only companies that sell it appear. <b>Comm %</b> is the default commission for that line (on premium excl. GST); a plan's own % overrides it. Renaming a company does not change existing policies.</p></div>`; }
   if(STAB.t==="plans"){ const list=s.plans.filter(p=>!STAB.planComp||p.company===STAB.planComp);
-    body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">Company<select class="in" id="plCo">${s.companies.map(c=>`<option ${c.name===STAB.planComp?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label>
-      <label class="f">Category<select class="in" id="plCat">${s.categories.map(c=>`<option>${esc(c)}</option>`).join("")}</select></label><label class="f">Plan / policy name<input class="in" id="plName"></label><label class="f" style="max-width:150px">Commission %<input class="in" id="plPct" type="number" step="any"></label><label class="f" style="max-width:150px">Renewal %<input class="in" id="plRen" type="number" step="any" title="Life renewal-premium commission %"></label><button class="btn o" id="plAdd">${I("plus")}Add</button></div>
+    const coSel=STAB.planComp||s.companies[0]?.name||"", linesFor=co=>coLines(findCo(co))||s.categories;
+    body=`<div class="card"><div class="row" style="margin-bottom:8px"><label class="f">Company<select class="in" id="plCo">${s.companies.map(c=>`<option ${c.name===coSel?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label>
+      <label class="f">Plan / policy name<input class="in" id="plName"></label><label class="f" style="max-width:150px">Commission %<input class="in" id="plPct" type="number" step="any"></label><label class="f" style="max-width:150px">Renewal %<input class="in" id="plRen" type="number" step="any" title="Life renewal-premium commission %"></label><button class="btn o" id="plAdd">${I("plus")}Add</button></div>
+      <div class="row" style="justify-content:flex-start;gap:16px;margin-bottom:18px"><span class="mu" style="flex:none;min-width:0;font-size:12.5px;font-weight:600">Line:</span><span id="plLines" style="display:flex;gap:16px;flex-wrap:wrap;flex:none;min-width:0">${linesFor(coSel).map((c,i)=>`<label class="ck"><input type="checkbox" value="${esc(c)}" ${i===0?"checked":""}> ${esc(c)}</label>`).join("")}</span></div>
       <div class="row" style="margin-bottom:10px;justify-content:flex-start"><label class="f" style="max-width:280px">Filter by company<select class="in" id="plFilter"><option value="">All</option>${s.companies.map(c=>`<option ${c.name===STAB.planComp?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label></div>
-      <div class="tw"><table class="tbl"><thead><tr><th>Plan</th><th>Company</th><th>Category</th><th>Commission %</th><th>Renewal %</th><th></th></tr></thead><tbody>${list.map(p=>`<tr data-id="${p.id}"><td><b>${esc(p.name)}</b></td><td>${esc(p.company)}</td><td>${catBadge(p.category)}</td><td><input class="in" style="max-width:110px" type="number" step="any" data-pf="commPct" value="${esc(p.commPct??"")}"></td><td><input class="in" style="max-width:110px" type="number" step="any" data-pf="renewalPct" value="${esc(p.renewalPct??"")}"></td><td class="r"><button class="btn g ic d" data-a="del">${I("trash")}</button></td></tr>`).join("")||emptyRow(6,"No plans")}</tbody></table></div><p class="mu" style="font-size:12px;margin-top:10px"><b>Commission %</b> is the base rate on premium excl. GST — it fills automatically when this plan is picked on a policy. <b>Renewal %</b> is used for Life renewal instalments. Rewards / incentives are entered manually on each policy.</p></div>`; }
+      <div class="tw"><table class="tbl"><thead><tr><th>Plan</th><th>Company</th><th>Line</th><th>Commission %</th><th>Renewal %</th><th></th></tr></thead><tbody>${list.map(p=>`<tr data-id="${p.id}"><td><b>${esc(p.name)}</b></td><td>${esc(p.company)}</td>
+        <td><div style="display:flex;gap:12px;flex-wrap:wrap">${[...new Set([...linesFor(p.company),...planCats(p)])].map(c=>`<label class="ck"><input type="checkbox" data-pline="${esc(c)}" ${planCats(p).includes(c)?"checked":""}> ${esc(c)}</label>`).join("")}</div></td>
+        <td><input class="in" style="max-width:110px" type="number" step="any" data-pf="commPct" value="${esc(p.commPct??"")}"></td><td><input class="in" style="max-width:110px" type="number" step="any" data-pf="renewalPct" value="${esc(p.renewalPct??"")}"></td><td class="r"><button class="btn g ic d" data-a="del">${I("trash")}</button></td></tr>`).join("")||emptyRow(6,"No plans")}</tbody></table></div>
+      <p class="mu" style="font-size:12px;margin-top:10px;line-height:1.55">Only plans listed here can be picked on a policy — nobody can type a new plan in the policy form. <b>Commission %</b> (on premium excl. GST) fills automatically when the plan is picked; if empty, the company's rate for that line is used. <b>Renewal %</b> is used for Life renewal instalments. Rewards / incentives are entered manually on each policy.</p></div>`; }
   if(STAB.t==="rms") body=`<div class="card"><div class="row" style="margin-bottom:16px"><label class="f">RM name<input class="in" id="rmN"></label><label class="f">RM code<input class="in" id="rmC"></label>
       <label class="f">Branch<select class="in" id="rmB">${s.branches.map(x=>`<option>${esc(x)}</option>`).join("")}</select></label><label class="f">Default commission %<input class="in" id="rmP" type="number" step="any"></label><button class="btn o" id="rmAdd">${I("plus")}Add</button></div>
     <div class="tw"><table class="tbl"><thead><tr><th>Name</th><th>Code</th><th>Branch</th><th>Comm. %</th><th></th></tr></thead><tbody>${s.rms.map(r=>`<tr data-id="${r.id}"><td><input class="in" data-rf="name" value="${esc(r.name)}"></td><td><input class="in" data-rf="code" value="${esc(r.code)}"></td>
@@ -2455,20 +2496,39 @@ function renderSettings(){
   $("#lgRm")&&($("#lgRm").onclick=()=>saveSettings({branding:{...b,logo:""}}));
   // companies
   if(STAB.t==="companies"){
-    const add=()=>{ const n=$("#coNew").value.trim(); if(!n) return; if(s.companies.some(c=>c.name.toLowerCase()===n.toLowerCase())) return toast("Company already exists.","wa"); saveSettings({companies:[...s.companies,{id:rid(),name:n,logo:""}]}); };
+    const add=()=>{ const n=$("#coNew").value.trim(); if(!n) return toast("Enter the company name.","er");
+      if(s.companies.some(c=>c.name.toLowerCase()===n.toLowerCase())) return toast("Company already exists.","wa");
+      const lines=$$("#coNewLines input:checked").map(x=>x.value); if(!lines.length) return toast("Tick at least one line this company sells (Life / Health / Motor…).","er");
+      saveSettings({companies:[...s.companies,{id:rid(),name:n,logo:"",lines,rates:{}}]}); };
     $("#coAdd").onclick=add; $("#coNew").onkeydown=e=>{ if(e.key==="Enter") add(); };
-    el.querySelector(".co-grid").onclick=async e=>{ const a=e.target.closest("[data-a]")?.dataset.a; if(!a) return; const id=e.target.closest(".co").dataset.id;
+    const tb=el.querySelector("tbody");
+    tb.onclick=async e=>{ const a=e.target.closest("[data-a]")?.dataset.a; if(!a) return; const id=e.target.closest("tr").dataset.id;
       if(a==="logo") pickImg(d=>saveSettings({companies:s.companies.map(c=>c.id===id?{...c,logo:d}:c)}));
-      if(a==="del"&&await confirmBox("Delete this company from the dropdown? Existing policies are not affected.","Delete",true)) saveSettings({companies:s.companies.filter(c=>c.id!==id)}); };
-    el.querySelector(".co-grid").onchange=e=>{ if(e.target.dataset.coname===undefined) return; const id=e.target.closest(".co").dataset.id; const n=e.target.value.trim(); if(n) saveSettings({companies:s.companies.map(c=>c.id===id?{...c,name:n}:c)}); };
+      if(a==="del"&&await confirmBox("Delete this company from the dropdowns? Existing policies are not affected.","Delete",true)) saveSettings({companies:s.companies.filter(c=>c.id!==id)}); };
+    tb.onchange=e=>{ const t=e.target, tr=t.closest("tr"); if(!tr) return; const id=tr.dataset.id, co=s.companies.find(c=>c.id===id); if(!co) return;
+      let upd=null;
+      if(t.dataset.coname!==undefined){ const n=t.value.trim(); if(!n) return; upd={...co,name:n}; }
+      if(t.dataset.line!==undefined){ const lines=$$("[data-line]",tr).filter(x=>x.checked).map(x=>x.dataset.line);
+        if(!lines.length){ t.checked=true; return toast("A company must sell at least one line.","er"); } upd={...co,lines}; }
+      if(t.dataset.rate!==undefined) upd={...co,rates:{...(co.rates||{}),[t.dataset.rate]:t.value===""?"":num(t.value)}};
+      if(t.dataset.ren!==undefined) upd={...co,renewalPct:t.value===""?"":num(t.value)};
+      if(upd) saveSettings({companies:s.companies.map(c=>c.id===id?upd:c)}).then(()=>toast(`${upd.name}: saved.`,"ok")); };
   }
   if(STAB.t==="plans"){
-    const add=()=>{ const n=$("#plName").value.trim(), co=$("#plCo").value, cat=$("#plCat").value; if(!n||!co) return toast("Add a company first and enter a plan name.","er"); STAB.planComp=co; const pv=id=>$("#"+id).value===""?"":num($("#"+id).value); saveSettings({plans:[...s.plans,{id:rid(),company:co,category:cat,name:n,commPct:pv("plPct"),renewalPct:pv("plRen")}]}); };
+    const add=()=>{ const n=$("#plName").value.trim(), co=$("#plCo").value; if(!n||!co) return toast("Add a company first and enter a plan name.","er");
+      const cats=$$("#plLines input:checked").map(x=>x.value); if(!cats.length) return toast("Tick the line for this plan (Life / Health / Motor…).","er");
+      if(s.plans.some(p=>p.company===co&&p.name.toLowerCase()===n.toLowerCase())) return toast("This plan already exists for "+co+".","wa");
+      STAB.planComp=co; const pv=id=>$("#"+id).value===""?"":num($("#"+id).value);
+      saveSettings({plans:[...s.plans,{id:rid(),company:co,category:cats[0],categories:cats,name:n,commPct:pv("plPct"),renewalPct:pv("plRen")}]}); };
+    $("#plCo").onchange=e=>{ const L=coLines(findCo(e.target.value))||s.categories; $("#plLines").innerHTML=L.map((c,i)=>`<label class="ck"><input type="checkbox" value="${esc(c)}" ${i===0?"checked":""}> ${esc(c)}</label>`).join(""); };
     $("#plAdd").onclick=add; $("#plName").onkeydown=e=>{ if(e.key==="Enter") add(); };
     $("#plFilter").onchange=e=>{ STAB.planComp=e.target.value; renderSettings(); };
     el.querySelector("tbody").onclick=e=>{ if(e.target.closest("[data-a=del]")){ const id=e.target.closest("tr").dataset.id; saveSettings({plans:s.plans.filter(p=>p.id!==id)}); } };
-    el.querySelector("tbody").onchange=e=>{ const f=e.target.dataset.pf; if(!f) return; const id=e.target.closest("tr").dataset.id; const v=e.target.value===""?"":num(e.target.value);
-      saveSettings({plans:s.plans.map(p=>p.id===id?{...p,[f]:v}:p)}).then(()=>toast("Plan commission saved.","ok")); };
+    el.querySelector("tbody").onchange=e=>{ const t=e.target, tr=t.closest("tr"); if(!tr) return; const id=tr.dataset.id;
+      if(t.dataset.pf){ const v=t.value===""?"":num(t.value); saveSettings({plans:s.plans.map(p=>p.id===id?{...p,[t.dataset.pf]:v}:p)}).then(()=>toast("Plan commission saved.","ok")); }
+      if(t.dataset.pline!==undefined){ const cats=$$("[data-pline]",tr).filter(x=>x.checked).map(x=>x.dataset.pline);
+        if(!cats.length){ t.checked=true; return toast("A plan needs at least one line.","er"); }
+        saveSettings({plans:s.plans.map(p=>p.id===id?{...p,categories:cats,category:cats[0]}:p)}).then(()=>toast("Plan saved.","ok")); } };
   }
   if(STAB.t==="rms"){
     $("#rmAdd").onclick=()=>{ const n=$("#rmN").value.trim(); if(!n) return toast("RM name required.","er"); saveSettings({rms:[...s.rms,{id:rid(),name:n,code:$("#rmC").value.trim(),branch:$("#rmB").value,commPct:$("#rmP").value===""?"":num($("#rmP").value)}]}); };
